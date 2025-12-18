@@ -4,6 +4,7 @@ library(tidyverse)
 library(pool)
 library(RPostgres)
 
+
 pool <- dbPool(
   RPostgres::Postgres(),
   dbname   = Sys.getenv("PGDATABASE"),
@@ -18,41 +19,44 @@ onStop(function() {
   poolClose(pool)
 })
 
-cp_df <- dbGetQuery(
-  pool,
-  sql("
-    SELECT
-        \"Pitcher\", \"Date\", \"BatterSide\", \"BatterTeam\", \"Inning\", \"Outs\",
-        \"Balls\", \"Strikes\", \"TaggedPitchType\", \"PitchCall\", \"KorBB\",
-        \"TaggedHitType\", \"PlayResult\", \"RelSpeed\", \"VertRelAngle\", \"HorzRelAngle\",
-        \"SpinRate\", \"SpinAxis\", \"RelHeight\", \"RelSide\", \"Extension\",
-        \"InducedVertBreak\", \"HorzBreak\", \"PlateLocHeight\", \"PlateLocSide\",
-        \"VertApprAngle\", \"HorzApprAngle\", \"ExitSpeed\", \"Angle\", \"Direction\",
-        \"Distance\", \"Batter\", \"PitcherTeam\"
-    FROM all_college_2025
-    WHERE \"PitcherTeam\" = 'CAL_MUS' OR \"BatterTeam\" = 'CAL_MUS'
-  ")
-) |>
-  mutate(IsStrike = if_else(PitchCall %in% c('StrikeSwinging', 'StrikeCalled', 'Strikecalled', 
-                                             'FoulBallNotFieldable', 'InPlay', 'FoulBallFieldable', 
-                                             'FoulBall', 'AutomaticStrike'), 1, 0),
-         IsBall = if_else(PitchCall %in% c('AutomaticBall', 'BallAutomatic', 'BallCalled', 
-                                           'BallInDirt', 'BallinDirt', 'BallIntentional', 
-                                           'Ballintentional', 'HitByPitch', 'HItByPitch'), 1, 0),
-         IsWhiff = if_else(PitchCall == 'StrikeSwinging', 1, 0),
-         IsWalk = if_else(KorBB == 'Walk', 1, 0),
-         IsK = if_else(KorBB == 'Strikeout', 1, 0),
-         IsHBP = if_else(PitchCall %in% c('HitByPitch', 'HItByPitch'), 1, 0),
-         IsHit = if_else(PlayResult %in% c('Single', 'SIngle', 'Double', 'triple','Triple', 'Homerun', 'HomeRun'), 1, 0),
-         Is_Single = if_else(PlayResult %in% c('Single', 'SIngle'), 1, 0),
-         Is_Double = if_else(PlayResult == 'Double', 1, 0),
-         Is_Triple = if_else(PlayResult %in% c('Triple', 'triple'), 1, 0),
-         Is_HomeRun = if_else(PlayResult %in% c('HomeRun', 'Homerun'), 1, 0),
-         Is_FlyBall = if_else(TaggedHitType %in% c('FlyBall', 'Flyball'), 1, 0),
-         Is_GroundBall = if_else(TaggedHitType %in% c('Groundball', 'GroundBall'), 1, 0)
-  )
+# cp_df <- dbGetQuery(
+#   pool,
+#   sql("
+#     SELECT
+#         \"Pitcher\", \"Date\", \"BatterSide\", \"BatterTeam\", \"Inning\", \"Outs\",
+#         \"Balls\", \"Strikes\", \"TaggedPitchType\", \"PitchCall\", \"KorBB\",
+#         \"TaggedHitType\", \"PlayResult\", \"RelSpeed\", \"VertRelAngle\", \"HorzRelAngle\",
+#         \"SpinRate\", \"SpinAxis\", \"RelHeight\", \"RelSide\", \"Extension\",
+#         \"InducedVertBreak\", \"HorzBreak\", \"PlateLocHeight\", \"PlateLocSide\",
+#         \"VertApprAngle\", \"HorzApprAngle\", \"ExitSpeed\", \"Angle\", \"Direction\",
+#         \"Distance\", \"Batter\", \"PitcherTeam\"
+#     FROM all_college_2025
+#     WHERE \"PitcherTeam\" = 'CAL_MUS' OR \"BatterTeam\" = 'CAL_MUS'
+#   ")
+# ) |>
+#   bind_rows(cp_fall) |>
+#   mutate(IsStrike = if_else(PitchCall %in% c('StrikeSwinging', 'StrikeCalled', 'Strikecalled',
+#                                              'FoulBallNotFieldable', 'InPlay', 'FoulBallFieldable',
+#                                              'FoulBall', 'AutomaticStrike'), 1, 0),
+#          IsBall = if_else(PitchCall %in% c('AutomaticBall', 'BallAutomatic', 'BallCalled',
+#                                            'BallInDirt', 'BallinDirt', 'BallIntentional',
+#                                            'Ballintentional', 'HitByPitch', 'HItByPitch'), 1, 0),
+#          IsSwing = if_else(PitchCall %in% c('StrikeSwinging', 'FoulBallNotFieldable', 'InPlay', 'FoulBallFieldable',
+#                                             'FoulBall'), 1, 0),
+#          IsWhiff = if_else(PitchCall == 'StrikeSwinging', 1, 0),
+#          IsWalk = if_else(KorBB == 'Walk', 1, 0),
+#          IsK = if_else(KorBB == 'Strikeout', 1, 0),
+#          IsHBP = if_else(PitchCall %in% c('HitByPitch', 'HItByPitch'), 1, 0),
+#          IsHit = if_else(PlayResult %in% c('Single', 'SIngle', 'Double', 'triple','Triple', 'Homerun', 'HomeRun'), 1, 0),
+#          Is_Single = if_else(PlayResult %in% c('Single', 'SIngle'), 1, 0),
+#          Is_Double = if_else(PlayResult == 'Double', 1, 0),
+#          Is_Triple = if_else(PlayResult %in% c('Triple', 'triple'), 1, 0),
+#          Is_HomeRun = if_else(PlayResult %in% c('HomeRun', 'Homerun'), 1, 0),
+#          Is_FlyBall = if_else(TaggedHitType %in% c('FlyBall', 'Flyball'), 1, 0),
+#          Is_GroundBall = if_else(TaggedHitType %in% c('Groundball', 'GroundBall'), 1, 0)
+#   )
 
-# cp_df <- read.csv("~/Downloads/Fall-25/20251118-BaggettStadium-Private-1_unverified.csv")
+cp_df <- read.csv("../data/cp_df.csv")
 
 cp_pitchers <- cp_df |>
   filter(PitcherTeam == "CAL_MUS")
@@ -108,10 +112,28 @@ body <- dashboardBody(
                   DT::DTOutput("table"))
               ),
               fluidRow(
+                box(
+                  width = 2,
+                  checkboxGroupInput(
+                    "heat_pitch", 
+                    "Select Pitch Type", 
+                    choices=unique(cp_pitchers$TaggedPitchType), 
+                    selected=NULL),
+                  checkboxGroupInput(
+                    "heat_hit_side", 
+                    "Select Batter Handedness", 
+                    choices=c("Right", "Left"),
+                    selected=NULL),
+                  ),
+                box(
+                  width = 6,
+                  plotOutput("pitcher_heat")
+                ),
+              ),
+              fluidRow(
                 box(plotly::plotlyOutput("movement_plot")),
                 box(plotly::plotlyOutput("release_plot"))
-              )
-              ,
+              ),
               value="pitcher_summary"
               ),
             
@@ -246,7 +268,7 @@ server <- function(input, output, session) {
         summarize(
           PitchCount = n(),
           Usage = PitchCount/nrow(rval_pitcher_df()),
-          WhiffRate = mean(IsWhiff),
+          WhiffRate = sum(IsWhiff)/sum(IsStrike),
           Velo = round(mean(RelSpeed, na.rm = TRUE),1),
           SpinRate = round(mean(SpinRate, na.rm = TRUE),0),
           IVB = round(mean(InducedVertBreak, na.rm = TRUE),1),
@@ -255,11 +277,6 @@ server <- function(input, output, session) {
         )
     })
     
-    
-    # Pitcher Name
-    output$previous_notes_title <- renderText({
-      paste("Previous Notes for", input$pitcher_drop)
-    })
     
     # Pitch Shape Summary Table
     output$table <- DT::renderDT({
@@ -301,16 +318,65 @@ server <- function(input, output, session) {
           title="Release Plot") +
         scale_color_discrete(name = "Pitch Type") +
         theme_minimal() + 
-        theme(
-          legend.position = "right",
-          legend.title = element_text(size = 12, face = "bold"),
-          legend.text  = element_text(size = 10),
-          legend.key   = element_rect(fill = "white", colour = "black")
-        ) +
         coord_fixed(ratio = 1)
     })
     
+    # Pitcher Heatmap
+    
+    output$pitcher_heat <- renderPlot({
+      
+      pitch_sel    <- input$heat_pitch
+      hit_side_sel <- input$heat_hit_side
+      cols <- viridisLite::turbo(256)
+      cols[1] <- "white"
+      
+      # if nothing selected → include all pitch types
+      if (is.null(pitch_sel) || length(pitch_sel) == 0) {
+        pitch_sel <- unique(cp_pitchers$TaggedPitchType)
+      }
+      
+      # if nothing selected → include all batter sides
+      if (is.null(hit_side_sel) || length(hit_side_sel) == 0) {
+        hit_side_sel <- unique(cp_pitchers$BatterSide)
+      }
+      
+      rval_pitcher_df() |>
+        left_join(rval_pitcher_summary_df(), by="TaggedPitchType") |>
+        filter(Usage > 0.01 & TaggedPitchType %in% pitch_sel & BatterSide %in% hit_side_sel) |>
+      ggplot( aes(x = PlateLocSide, y = PlateLocHeight)) +
+        stat_density_2d(
+          aes(fill = after_stat(ndensity)),
+          geom     = "raster",
+          contour  = FALSE,
+          h        = c(0.55, 0.55),
+          n        = 300
+        ) +
+        scale_fill_gradientn(colors = cols) +
+        coord_fixed(
+          xlim   = c(-2.3, 2.3),
+          ylim   = c(-1, 5),
+          expand = FALSE
+        ) +
+        labs(x = "Horizontal", y = "Vertical", title = "Pitch Usage Heatmap") +
+        annotate("segment", x = -0.85, xend = 0.85,  y = 1.6, yend = 1.6, color = "black", linewidth = 1.2) +
+        annotate("segment", x = -0.85, xend = 0.85,  y = 3.5, yend = 3.5, color = "black", linewidth = 1.2) +
+        annotate("segment", x = -0.85, xend = -0.85, y = 1.6, yend = 3.5, color = "black", linewidth = 1.2) +
+        annotate("segment", x = 0.85,  xend = 0.85,  y = 1.6, yend = 3.5, color = "black", linewidth = 1.2) +
+        annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black") +
+        annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black") +
+        annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black") +
+        annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
+        annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
+        theme_minimal() 
+    })
+    
     # Pitcher Notes
+    
+    # Pitcher Name
+    output$previous_notes_title <- renderText({
+      paste("Previous Notes for", input$pitcher_drop)
+    })
+    
     notes_trigger <- reactiveVal(0)
     
     # Access Notes
@@ -457,9 +523,6 @@ server <- function(input, output, session) {
         })
       )
     })
-    
-    
-    
     
     
   # Hitter Dashboard Graphics
