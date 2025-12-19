@@ -3,5 +3,6 @@
 .RData
 .Ruserdata
 .Renviron
-./rsconnect
-.DS_Store
+app/.Renviron.sh
+app/rsconnect/
+*.DS_Store
