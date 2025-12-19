@@ -6,12 +6,12 @@ library(RPostgres)
 
 
 pool <- dbPool(
-  RPostgres::Postgres(),
-  dbname   = Sys.getenv("PGDATABASE"),
-  host     = Sys.getenv("PGHOST"),
-  port     = Sys.getenv("PGPORT"),
-  user     = Sys.getenv("PGUSER"),
-  password = Sys.getenv("PGPASSWORD"),
+  Postgres(),
+  host     = Sys.getenv("SUPABASE_HOST"),
+  port     = as.integer(Sys.getenv("SUPABASE_PORT")),
+  dbname   = Sys.getenv("SUPABASE_DB"),
+  user     = Sys.getenv("SUPABASE_USER"),
+  password = Sys.getenv("SUPABASE_PASS"),
   sslmode  = "require"
 )
 
@@ -56,14 +56,13 @@ onStop(function() {
 #          Is_GroundBall = if_else(TaggedHitType %in% c('Groundball', 'GroundBall'), 1, 0)
 #   )
 
-cp_df <- read.csv("../data/cp_df.csv")
+cp_df <- read.csv("data/cp_df.csv")
 
 cp_pitchers <- cp_df |>
   filter(PitcherTeam == "CAL_MUS")
 
 cp_hitters <- cp_df |>
   filter(BatterTeam == "CAL_MUS")
-
 
 
 
@@ -108,16 +107,20 @@ body <- dashboardBody(
             tabPanel("Summary Dashboard",
               fluidRow(
                 box(
+                  title = "Pitch Summary",
                   width = 12,
-                  DT::DTOutput("table"))
+                  status = "primary",
+                  solidHeader = TRUE,
+                  DT::DTOutput("table")
+                )
               ),
               fluidRow(
                 box(
-                  width = 2,
+                  width = 3,
                   checkboxGroupInput(
                     "heat_pitch", 
                     "Select Pitch Type", 
-                    choices=unique(cp_pitchers$TaggedPitchType), 
+                    choices=sort(unique(cp_pitchers$TaggedPitchType)), 
                     selected=NULL),
                   checkboxGroupInput(
                     "heat_hit_side", 
@@ -126,7 +129,7 @@ body <- dashboardBody(
                     selected=NULL),
                   ),
                 box(
-                  width = 6,
+                  width = 3,
                   plotOutput("pitcher_heat")
                 ),
               ),
@@ -149,12 +152,6 @@ body <- dashboardBody(
                      value="pitcher_kinatrax"
             ),
             
-            # Expand text box?
-            # FStrings?
-            # Use input for other input - "Note for Naess, Grifin"
-            # Clear message after submit
-            # Edit messages
-            # Dynamically load boxes for each message
             tabPanel("Outing Notes",
                      fluidRow(
                        box(
@@ -186,7 +183,7 @@ body <- dashboardBody(
     tabItem("hitter_dash",
             fluidRow(box(selectInput("hitter_drop",
                                      "Select Hitter",
-                                     choices=unique(cp_hitters$Batter))
+                                     choices=sort(unique(cp_hitters$Batter)))
                         ),
                       box(dateRangeInput("hitter_game_range",
                                         "Select Date Range",
@@ -195,10 +192,28 @@ body <- dashboardBody(
                           )
             ),
             tabsetPanel(
-              
               tabPanel("Summary Dashboard",
                        fluidRow(
-                         box(plotly::plotlyOutput("hitter_heat")),
+                         box(width = 10,
+                             DT::DTOutput("hitter_sum_table"))
+                       ),
+                       fluidRow(
+                         box(
+                           width = 3,
+                           checkboxGroupInput(
+                             "heat_pitch_hit", 
+                             "Select Pitch Type", 
+                             choices=sort(unique(cp_hitters$TaggedPitchType)), 
+                             selected=NULL),
+                           checkboxGroupInput(
+                             "heat_pitch_side", 
+                             "Select Pitcher Handedness", 
+                             choices=c("Right", "Left"),
+                             selected=NULL),
+                         ),
+                         box(
+                           width = 3,
+                           plotOutput("hitter_heat")),
                        ),
                        value="hitter_summary"
               ),
@@ -249,12 +264,22 @@ body <- dashboardBody(
 
 )
 
-ui <- dashboardPage(header, sidebar, body)
+ui <- dashboardPage(header, sidebar, body, skin="blue")
 
 server <- function(input, output, session) {
   
-  # Pitcher Dashboard Graphics
+  ##########################################
+  ####### GENERIC GRAPHICS FUNCTIONS  ######
+  ##########################################
   
+  
+  
+  #########################################
+  ####### Pitcher Dashboard Graphics ######
+  #########################################
+  
+  
+    # DATAFRAME OF PITCHES FOR SELECTED PITCHER  
     rval_pitcher_df <- reactive({
       cp_pitchers |>
         filter(Pitcher == input$pitcher_drop
@@ -262,6 +287,7 @@ server <- function(input, output, session) {
                & Date <= input$pitcher_game_range[2])
     })
     
+    # DATAFRAME OF SUMMARY STATS FOR SELECTED PITCHER
     rval_pitcher_summary_df <- reactive({
       rval_pitcher_df() |>
         group_by(TaggedPitchType) |>
@@ -278,7 +304,7 @@ server <- function(input, output, session) {
     })
     
     
-    # Pitch Shape Summary Table
+    # PER PITCH SUMMARY TABLE
     output$table <- DT::renderDT({
       rval_pitcher_summary_df()  |>
         filter(Usage > 0.01) |>
@@ -289,13 +315,23 @@ server <- function(input, output, session) {
         )
     })
     
-    # Pitcher Movement Plot
+    # PITCH MOVEMENT PLOT
     output$movement_plot <- plotly::renderPlotly({
-      rval_pitcher_df() |>
+      gg_move <- rval_pitcher_df() |>
         left_join(rval_pitcher_summary_df(), by="TaggedPitchType") |>
         filter(Usage > 0.01) |>
-      ggplot() +
-        geom_point(aes(x=HorzBreak, y=InducedVertBreak, color=TaggedPitchType)) +
+        ggplot() +
+        geom_point(aes(
+          x=HorzBreak, 
+          y=InducedVertBreak, 
+          color=TaggedPitchType,
+          text = paste(
+            "Pitch Type:", TaggedPitchType,
+            "<br>V Break:", round(InducedVertBreak, 2),
+            "<br>H Break:", round(HorzBreak, 2),
+            "<br>Release Speed:", round(RelSpeed, 1),
+            "<br>Date:", Date
+          ))) +
         labs(
           x="Horizontal Break",
           y="Induced Vertical Break",
@@ -303,15 +339,27 @@ server <- function(input, output, session) {
         scale_color_discrete(name = "Pitch Type") +
         theme_minimal() +
         coord_fixed(ratio = 1)
+      
+        plotly::ggplotly(gg_move, tooltip="text")
     })
     
-    # Pitcher Release Plot
+    # PITCHER RELEASE PLOT
     output$release_plot <- plotly::renderPlotly({
-      rval_pitcher_df() |>
+      gg_release <- rval_pitcher_df() |>
         left_join(rval_pitcher_summary_df(), by="TaggedPitchType") |>
         filter(Usage > 0.01) |>
         ggplot() +
-        geom_point(aes(x=RelSide, y=RelHeight, color=TaggedPitchType)) +
+        geom_point(aes(
+          x=RelSide, 
+          y=RelHeight, 
+          color=TaggedPitchType,
+          text = paste(
+            "Pitch Type:", TaggedPitchType,
+            "<br>Rel Side:", round(RelSide, 1),
+            "<br>Rel Height:", round(RelHeight, 1),
+            "<br>Release Speed:", round(RelSpeed, 1),
+            "<br>Date:", Date
+          ))) +
         labs(
           x="Relase Side (Ft)",
           y="Release Height (Ft)",
@@ -319,10 +367,11 @@ server <- function(input, output, session) {
         scale_color_discrete(name = "Pitch Type") +
         theme_minimal() + 
         coord_fixed(ratio = 1)
+      
+      plotly::ggplotly(gg_release, tooltip="text")
     })
     
-    # Pitcher Heatmap
-    
+    # PITCH USAGE HEATMAP
     output$pitcher_heat <- renderPlot({
       
       pitch_sel    <- input$heat_pitch
@@ -370,16 +419,18 @@ server <- function(input, output, session) {
         theme_minimal() 
     })
     
-    # Pitcher Notes
+    ##########################################
+    ####### Pitcher Notes Functionality ######
+    ##########################################
     
-    # Pitcher Name
+    # PITCHER NAME
     output$previous_notes_title <- renderText({
       paste("Previous Notes for", input$pitcher_drop)
     })
     
     notes_trigger <- reactiveVal(0)
     
-    # Access Notes
+    # READ IN PREVIOUS NOTES
     notes_df <- reactive({
       req(input$pitcher_drop)
       notes_trigger()     
@@ -397,7 +448,7 @@ server <- function(input, output, session) {
       )
     })
     
-    # Add New Note
+    # ADD A NEW NOTE
     rv_add_note <- observeEvent(input$submit_note, {
       req(input$pitcher_drop, input$note_date, input$session_type, input$note_text)
       
@@ -419,7 +470,7 @@ server <- function(input, output, session) {
       notes_trigger(notes_trigger() + 1)
     })
     
-    # Delete Note
+    # DELETE NOTE
     observeEvent(input$delete_note_id, {
       req(input$delete_note_id)
       
@@ -434,7 +485,7 @@ server <- function(input, output, session) {
     
     
     
-    # Edit Note
+    # EDIT NOTE
     editing_note_id <- reactiveVal(NULL)
     
     observeEvent(input$edit_note_id, {
@@ -464,6 +515,7 @@ server <- function(input, output, session) {
       )
     })
     
+    # SAVE EDIT
     observeEvent(input$save_edit, {
       req(editing_note_id(), input$edit_note_text)
       
@@ -479,6 +531,7 @@ server <- function(input, output, session) {
     
     
     
+    # RENDER EDIT/DELETE INTERFACE
     output$notes_list <- renderUI({
       df <- notes_df()
       
@@ -525,35 +578,119 @@ server <- function(input, output, session) {
     })
     
     
-  # Hitter Dashboard Graphics
+    ##########################################
+    ####### Hitter Dashboard Graphics  #######
+    ##########################################
     
-    
+    # DATA FRAME OF PITCHES FOR SELECTED HITTER
     rval_hitter_df <- reactive({
       cp_hitters |>
         filter(Batter == input$hitter_drop
                & Date >= input$hitter_game_range[1]
-               & Date <= input$hitter_game_range[2])
+               & Date <= input$hitter_game_range[2]) |>
+        mutate(IsKWhiff = if_else((PitchCall == 'StrikeSwinging') & (KorBB == 'Strikeout'), 1, 0),
+               IsKCalled = if_else((PitchCall %in% c('StrikeCalled', 'Strikecalled') & (KorBB == 'Strikeout')), 1, 0),
+               LessTwoKFoul = if_else((PitchCall %in% c('FoulBallNotFieldable', 'FoulBallFieldable','FoulBall') & (Strikes < 2)), 1, 0),
+               TwoKFoul = if_else((PitchCall %in% c('FoulBallNotFieldable', 'FoulBallFieldable','FoulBall') & (Strikes == 2)), 1, 0),
+               Is_InPlay = if_else(PitchCall == "InPlay", 1, 0),
+               Whiff_FB = if_else((IsWhiff == 1) & (TaggedPitchType %in% c('Fastball', 'FourSeamFastBall', 'OneSeamFastBall', 'Sinker', 'TwoSeamFastBall')), 1, 0),
+               Whiff_CB_SL = if_else((IsWhiff == 1) & (TaggedPitchType %in% c('Curveball', 'Slider', 'Sweeper')), 1, 0),
+               Whiff_CH = if_else((IsWhiff == 1) & (TaggedPitchType %in% c('ChangeUp', 'Splitter')), 1, 0)
+               )
+    })
+    
+    # HITTER SUMMARY STATS TABLE
+    output$hitter_sum_table <- DT::renderDT({
+      rval_hitter_df() |>
+        group_by(Batter) |>
+        summarize(
+          Swings = sum(IsSwing),
+          Walks = sum(IsWalk),
+          HBP = sum(IsHBP),
+          K = sum(IsKWhiff),
+          K_Looking = sum(IsKCalled),
+          Less_Two_K_Foul = sum(LessTwoKFoul),
+          Two_K_Foul = sum(TwoKFoul),
+          InPlay = sum(Is_InPlay),
+          Whiff_FB = sum(Whiff_FB),
+          Whiff_CB_SL = sum(Whiff_CB_SL),
+          Whiff_CH = sum(Whiff_CH),
+          Whiff_Rate = sum(IsWhiff)/Swings,
+          .groups = "drop"
+        ) |>
+        mutate(
+          Whiff_Rate = scales::percent(Whiff_Rate, 1)
+        )
     })
     
     # Heat Zone Plot
-      output$hitter_heat <- plotly::renderPlotly({
+      # output$hitter_heat <- plotly::renderPlotly({
+      #   rval_hitter_df() |>
+      #   ggplot() + 
+      #     geom_point(aes(x=PlateLocSide, y=PlateLocHeight, color=TaggedPitchType)) +
+      #     annotate("segment", x = -0.85, xend = 0.85,  y = 1.6, yend = 1.6, colour = "black", size = 1.2) +
+      #     annotate("segment", x = -0.85, xend = 0.85,  y = 3.5, yend = 3.5, colour = "black", size = 1.2) +
+      #     annotate("segment", x = -0.85, xend = -0.85, y = 1.6, yend = 3.5, colour = "black", size = 1.2) +
+      #     annotate("segment", x = 0.85,  xend = 0.85,  y = 1.6, yend = 3.5, colour = "black", size = 1.2) +
+      #     annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, colour = "black") +
+      #     annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, colour = "black") +
+      #     annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, colour = "black") +
+      #     annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, colour = "black") +
+      #     annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, colour = "black") +
+      #     labs(
+      #       x="",
+      #       y=""
+      #     ) +
+      #   coord_fixed(ratio = 1)
+      # })
+      
+    
+      
+      # PITCHES SEEN HEATMAP
+      output$hitter_heat <- renderPlot({
+        
+        pitch_sel    <- input$heat_pitch_hit
+        pitch_side_sel <- input$heat_pitch_side
+        cols <- viridisLite::turbo(256)
+        cols[1] <- "white"
+        
+        # if nothing selected → include all pitch types
+        if (is.null(pitch_sel) || length(pitch_sel) == 0) {
+          pitch_sel <- unique(cp_hitters$TaggedPitchType)
+        }
+        
+        # if nothing selected → include all batter sides
+        if (is.null(pitch_side_sel) || length(pitch_side_sel) == 0) {
+          pitch_side_sel <- unique(cp_hitters$PitcherThrows)
+        }
+        
         rval_hitter_df() |>
-        ggplot() + 
-          geom_point(aes(x=PlateLocSide, y=PlateLocHeight, color=TaggedPitchType)) +
-          annotate("segment", x = -0.85, xend = 0.85,  y = 1.6, yend = 1.6, colour = "black", size = 1.2) +
-          annotate("segment", x = -0.85, xend = 0.85,  y = 3.5, yend = 3.5, colour = "black", size = 1.2) +
-          annotate("segment", x = -0.85, xend = -0.85, y = 1.6, yend = 3.5, colour = "black", size = 1.2) +
-          annotate("segment", x = 0.85,  xend = 0.85,  y = 1.6, yend = 3.5, colour = "black", size = 1.2) +
-          annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, colour = "black") +
-          annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, colour = "black") +
-          annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, colour = "black") +
-          annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, colour = "black") +
-          annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, colour = "black") +
-          labs(
-            x="",
-            y=""
+          filter(TaggedPitchType %in% pitch_sel & PitcherThrows %in% pitch_side_sel) |>
+          ggplot( aes(x = PlateLocSide, y = PlateLocHeight)) +
+          stat_density_2d(
+            aes(fill = after_stat(ndensity)),
+            geom     = "raster",
+            contour  = FALSE,
+            h        = c(0.55, 0.55),
+            n        = 300
           ) +
-        coord_fixed(ratio = 1)
+          scale_fill_gradientn(colors = cols) +
+          coord_fixed(
+            xlim   = c(-2.3, 2.3),
+            ylim   = c(-1, 5),
+            expand = FALSE
+          ) +
+          labs(x = "Horizontal", y = "Vertical", title = "Pitches Seen Heatmap") +
+          annotate("segment", x = -0.85, xend = 0.85,  y = 1.6, yend = 1.6, color = "black", linewidth = 1.2) +
+          annotate("segment", x = -0.85, xend = 0.85,  y = 3.5, yend = 3.5, color = "black", linewidth = 1.2) +
+          annotate("segment", x = -0.85, xend = -0.85, y = 1.6, yend = 3.5, color = "black", linewidth = 1.2) +
+          annotate("segment", x = 0.85,  xend = 0.85,  y = 1.6, yend = 3.5, color = "black", linewidth = 1.2) +
+          annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black") +
+          annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black") +
+          annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black") +
+          annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
+          annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
+          theme_minimal() 
       })
     
 }
