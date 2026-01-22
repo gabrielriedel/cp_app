@@ -69,20 +69,21 @@ cp_hitters <- cp_df |>
 header <- dashboardHeader(
   title = "Cal Poly Baseball Application"
 )
-  
+
 sidebar <- dashboardSidebar(
   sidebarMenu(
-    menuItem("Pitcher Dashboard", tabName='pitcher_dash'),
-    menuItem("Hitter Dashboard", tabName='hitter_dash'),
-    menuItem("Scouting Reports",
-             menuSubItem("Opposing Pitchers", tabName='pitcher_scout'),
-             menuSubItem("Opposing Hitters", tabName='hitter_scout'),
-             tabName='scouting'
-             ),
-    menuItem("Live Dashboards",
-             menuSubItem("Live Trackman Dashboard", tabName='live_trackman'),
-             menuSubItem("Live Rapsodo Dashboard", tabName='live_rapsodo'),
-             tabName='live_dash')
+    menuItem("Pitcher Dashboard", tabName="pitcher_dash"),
+    menuItem("Hitter Dashboard", tabName="hitter_dash"),
+    menuItem(
+      "Scouting Reports",
+      menuSubItem("Opposing Pitchers", tabName="pitcher_scout"),
+      menuSubItem("Opposing Hitters", tabName="hitter_scout"),
+      tabName = "scouting"),
+    menuItem(
+      "Live Dashboards",
+      menuSubItem("Live Trackman Dashboard", tabName='live_trackman'),
+      menuSubItem("Live Rapsodo Dashboard", tabName='live_rapsodo'),
+      tabName='live_dash')
   )
 )
   
@@ -194,7 +195,10 @@ body <- dashboardBody(
             tabsetPanel(
               tabPanel("Summary Dashboard",
                        fluidRow(
-                         box(width = 10,
+                         box(title = "Batter Summary",
+                             width = 12,
+                             status = "primary",
+                             solidHeader = TRUE,
                              DT::DTOutput("hitter_sum_table"))
                        ),
                        fluidRow(
