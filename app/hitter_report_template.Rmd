@@ -1,0 +1,566 @@
+---
+title: ""
+output:
+  html_document:
+    theme: null
+    self_contained: true
+    css: null
+params:
+  team: "Unknown Team"
+  pitcher_hand: "Right"
+  dates: !r c(Sys.Date() - 30, Sys.Date())
+  batters: NULL
+  batter_data: NULL
+  batter_notes: NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.align = "center")
+library(tidyverse)
+library(kableExtra)
+library(viridisLite)
+library(gridExtra)
+
+# Source helper functions if not already loaded
+if (!exists("generate_swingmiss_heatmap")) {
+  # Define inline versions for standalone rendering
+
+  pitch_type_map <- list(
+    "4SM" = c("Fastball", "Four-Seam", "FourSeam", "FourSeamFastBall"),
+    "2SM" = c("Sinker", "Two-Seam", "TwoSeam", "TwoSeamFastBall"),
+    "CT" = c("Cutter"),
+    "CB" = c("Curveball", "Curve"),
+    "SL" = c("Slider", "Sweeper"),
+    "CH" = c("Changeup", "ChangeUp", "Splitter")
+  )
+
+  map_pitch_type <- function(pitch_type) {
+    if (is.na(pitch_type) || is.null(pitch_type)) return(NA_character_)
+    for (abbrev in names(pitch_type_map)) {
+      if (pitch_type %in% pitch_type_map[[abbrev]]) {
+        return(abbrev)
+      }
+    }
+    pitch_type
+  }
+
+  generate_swingmiss_heatmap <- function(df, pitch_type, title = NULL) {
+    plot_data <- df |>
+      filter(pitch_type_abbrev == pitch_type & pitchcall == "StrikeSwinging") |>
+      filter(!is.na(platelocside) & !is.na(platelocheight))
+
+    if (is.null(title)) title <- paste0("S/M ", pitch_type)
+
+    if (nrow(plot_data) < 3) {
+      return(ggplot() + annotate("text", x = 0, y = 2.5, label = "N/A", size = 2, color = "#888") +
+             theme_void() + labs(title = title) +
+             theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold")))
+    }
+
+    cols <- viridisLite::turbo(256)
+    cols[1] <- "white"
+
+    ggplot(plot_data, aes(x = platelocside, y = platelocheight)) +
+      stat_density_2d(aes(fill = after_stat(ndensity)), geom = "raster", contour = FALSE, h = c(0.55, 0.55), n = 50) +
+      scale_fill_gradientn(colors = cols, guide = "none") +
+      annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5, fill = NA, color = "black", linewidth = 0.4) +
+      coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
+      labs(title = title) +
+      theme_void() +
+      theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold"), plot.margin = margin(1,1,1,1))
+  }
+
+  generate_slg_heatmap_batter <- function(df, pitch_type, title = NULL) {
+    plot_data <- df |>
+      filter(pitch_type_abbrev == pitch_type & pitchcall == "InPlay") |>
+      filter(playresult %in% c("Single", "SIngle", "Double", "Triple", "triple", "HomeRun", "Homerun")) |>
+      filter(!is.na(platelocside) & !is.na(platelocheight))
+
+    if (is.null(title)) title <- paste0("AVG ", pitch_type)
+
+    if (nrow(plot_data) < 3) {
+      return(ggplot() + annotate("text", x = 0, y = 2.5, label = "N/A", size = 2, color = "#888") +
+             theme_void() + labs(title = title) +
+             theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold")))
+    }
+
+    cols <- viridisLite::turbo(256)
+    cols[1] <- "white"
+
+    ggplot(plot_data, aes(x = platelocside, y = platelocheight)) +
+      stat_density_2d(aes(fill = after_stat(ndensity)), geom = "raster", contour = FALSE, h = c(0.55, 0.55), n = 50) +
+      scale_fill_gradientn(colors = cols, guide = "none") +
+      annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5, fill = NA, color = "black", linewidth = 0.4) +
+      coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
+      labs(title = title) +
+      theme_void() +
+      theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold"), plot.margin = margin(1,1,1,1))
+  }
+
+  generate_exitvelo_heatmap <- function(df, title = "EXITVELO") {
+    plot_data <- df |>
+      filter(pitchcall == "InPlay" & !is.na(exitspeed)) |>
+      filter(!is.na(platelocside) & !is.na(platelocheight))
+
+    if (nrow(plot_data) < 3) {
+      return(ggplot() + annotate("text", x = 0, y = 2.5, label = "N/A", size = 2, color = "#888") +
+             theme_void() + labs(title = title) +
+             theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold")))
+    }
+
+    cols <- viridisLite::turbo(256)
+    cols[1] <- "white"
+
+    ggplot(plot_data, aes(x = platelocside, y = platelocheight)) +
+      stat_density_2d(aes(fill = after_stat(ndensity)), geom = "raster", contour = FALSE, h = c(0.55, 0.55), n = 50) +
+      scale_fill_gradientn(colors = cols, guide = "none") +
+      annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5, fill = NA, color = "black", linewidth = 0.4) +
+      coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
+      labs(title = title) +
+      theme_void() +
+      theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold"), plot.margin = margin(1,1,1,1))
+  }
+
+  generate_popup_heatmap <- function(df, title = "POPUP") {
+    plot_data <- df |>
+      filter(pitchcall == "InPlay" & !is.na(angle)) |>
+      filter(angle > 50) |>
+      filter(!is.na(platelocside) & !is.na(platelocheight))
+
+    if (nrow(plot_data) < 3) {
+      return(ggplot() + annotate("text", x = 0, y = 2.5, label = "N/A", size = 2, color = "#888") +
+             theme_void() + labs(title = title) +
+             theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold")))
+    }
+
+    cols <- viridisLite::turbo(256)
+    cols[1] <- "white"
+
+    ggplot(plot_data, aes(x = platelocside, y = platelocheight)) +
+      stat_density_2d(aes(fill = after_stat(ndensity)), geom = "raster", contour = FALSE, h = c(0.55, 0.55), n = 50) +
+      scale_fill_gradientn(colors = cols, guide = "none") +
+      annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5, fill = NA, color = "black", linewidth = 0.4) +
+      coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
+      labs(title = title) +
+      theme_void() +
+      theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold"), plot.margin = margin(1,1,1,1))
+  }
+
+  generate_2k_miss_heatmap <- function(df, title = "2K MISS") {
+    plot_data <- df |>
+      filter(strikes == 2 & pitchcall == "StrikeSwinging") |>
+      filter(!is.na(platelocside) & !is.na(platelocheight))
+
+    if (nrow(plot_data) < 3) {
+      return(ggplot() + annotate("text", x = 0, y = 2.5, label = "N/A", size = 2, color = "#888") +
+             theme_void() + labs(title = title) +
+             theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold")))
+    }
+
+    cols <- viridisLite::turbo(256)
+    cols[1] <- "white"
+
+    ggplot(plot_data, aes(x = platelocside, y = platelocheight)) +
+      stat_density_2d(aes(fill = after_stat(ndensity)), geom = "raster", contour = FALSE, h = c(0.55, 0.55), n = 50) +
+      scale_fill_gradientn(colors = cols, guide = "none") +
+      annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5, fill = NA, color = "black", linewidth = 0.4) +
+      coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
+      labs(title = title) +
+      theme_void() +
+      theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold"), plot.margin = margin(1,1,1,1))
+  }
+
+  generate_2k_take_heatmap <- function(df, title = "2K TAKE") {
+    plot_data <- df |>
+      filter(strikes == 2 & pitchcall == "StrikeCalled") |>
+      filter(!is.na(platelocside) & !is.na(platelocheight))
+
+    if (nrow(plot_data) < 3) {
+      return(ggplot() + annotate("text", x = 0, y = 2.5, label = "N/A", size = 2, color = "#888") +
+             theme_void() + labs(title = title) +
+             theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold")))
+    }
+
+    cols <- viridisLite::turbo(256)
+    cols[1] <- "white"
+
+    ggplot(plot_data, aes(x = platelocside, y = platelocheight)) +
+      stat_density_2d(aes(fill = after_stat(ndensity)), geom = "raster", contour = FALSE, h = c(0.55, 0.55), n = 50) +
+      scale_fill_gradientn(colors = cols, guide = "none") +
+      annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5, fill = NA, color = "black", linewidth = 0.4) +
+      coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
+      labs(title = title) +
+      theme_void() +
+      theme(plot.title = element_text(hjust = 0.5, size = 6, face = "bold"), plot.margin = margin(1,1,1,1))
+  }
+}
+
+# Highlight colors
+highlight_colors <- list(
+  "none" = "transparent",
+  "yellow" = "#fef08a",
+  "green" = "#bbf7d0",
+  "red" = "#fecaca",
+  "blue" = "#bfdbfe",
+  "orange" = "#fed7aa",
+  "purple" = "#e9d5ff"
+)
+
+# Count labels
+count_labels <- c("0-0", "RISP", "0-1", "1-0", "1-1", "2-0", "2-1", "3-1", "0-2", "1-2", "2-2", "3-2")
+
+# Null coalescing operator
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (is.character(x) && x == "")) y else x
+```
+
+<style>
+/* Print-optimized compact layout */
+body {
+  font-family: Arial, sans-serif;
+  font-size: 8px;
+  margin: 0;
+  padding: 5px;
+  max-width: 100%;
+}
+
+@media print {
+  @page { size: letter landscape; margin: 0.2in; }
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    font-size: 7px;
+    padding: 0;
+    margin: 0;
+  }
+  .batter-section { page-break-inside: avoid; }
+}
+
+.header-box {
+  background: #1a365d;
+  color: white;
+  padding: 8px 15px;
+  margin-bottom: 10px;
+  border-radius: 4px;
+}
+.header-box h1 { margin: 0; font-size: 16px; }
+.header-box .subtitle { font-size: 10px; opacity: 0.9; }
+
+.batter-section {
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 12px;
+  background: #fafafa;
+}
+
+.batter-header {
+  background: #2d3748;
+  color: white;
+  padding: 5px 10px;
+  margin-bottom: 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.heatmap-row {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 5px;
+}
+
+.heatmap-cell {
+  flex: 1;
+  text-align: center;
+}
+
+.heatmap-label {
+  font-size: 7px;
+  font-weight: bold;
+  margin-bottom: 1px;
+}
+
+.count-row {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.count-box {
+  flex: 0 0 55px;
+  text-align: center;
+  padding: 3px;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  font-size: 8px;
+}
+
+.count-label {
+  font-weight: bold;
+  margin-bottom: 2px;
+}
+
+.count-values {
+  display: flex;
+  gap: 2px;
+  justify-content: center;
+}
+
+.count-value {
+  background: #f0f0f0;
+  padding: 1px 4px;
+  border-radius: 2px;
+  min-width: 20px;
+}
+
+.images-row {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.image-cell {
+  flex: 1;
+  text-align: center;
+}
+
+.image-placeholder {
+  height: 50px;
+  background: #f5f5f5;
+  border: 1px dashed #ccc;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 7px;
+  color: #888;
+}
+
+.image-cell img {
+  max-height: 50px;
+  max-width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+}
+
+.stats-notes-row {
+  display: flex;
+  gap: 10px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3px;
+  flex: 0 0 200px;
+}
+
+.stat-cell {
+  text-align: center;
+  background: #f0f0f0;
+  padding: 2px;
+  border-radius: 2px;
+}
+
+.stat-label {
+  font-size: 7px;
+  font-weight: bold;
+}
+
+.stat-value {
+  font-size: 9px;
+}
+
+.notes-box {
+  flex: 1;
+  background: #fffbeb;
+  border: 1px solid #f6e05e;
+  border-radius: 3px;
+  padding: 4px;
+  font-size: 8px;
+}
+
+.notes-label {
+  font-weight: bold;
+  color: #744210;
+  font-size: 8px;
+  margin-bottom: 2px;
+}
+
+.footer {
+  margin-top: 10px;
+  padding-top: 5px;
+  border-top: 1px solid #e2e8f0;
+  font-size: 7px;
+  color: #718096;
+  text-align: center;
+}
+</style>
+
+```{r header, results='asis', echo=FALSE}
+hand_text <- if(params$pitcher_hand == "Right") "vs RHP" else "vs LHP"
+cat('<div class="header-box">')
+cat(sprintf('<h1>%s | Hitter Scouting Report</h1>', params$team))
+cat(sprintf('<div class="subtitle">%s | %s to %s</div>', hand_text, params$dates[1], params$dates[2]))
+cat('</div>')
+```
+
+```{r batter-sections, results='asis', echo=FALSE, fig.height=0.8, fig.width=0.8}
+if (!is.null(params$batters) && length(params$batters) > 0) {
+
+  for (batter in params$batters) {
+    df <- params$batter_data[[batter]]
+    notes <- params$batter_notes[[batter]]
+    if (is.null(notes)) notes <- list()
+
+    cat('<div class="batter-section">')
+    cat(sprintf('<div class="batter-header">%s</div>', batter))
+
+    # S/M Heatmaps Row
+    cat('<div class="heatmap-row">')
+    for (pt in c("4SM", "2SM", "CT", "CB", "SL", "CH")) {
+      cat('<div class="heatmap-cell">')
+      cat(sprintf('<div class="heatmap-label">S/M %s</div>', pt))
+      cat('</div>')
+    }
+    cat('</div>')
+
+    # Generate S/M heatmaps
+    if (!is.null(df) && nrow(df) > 0) {
+      sm_plots <- lapply(c("4SM", "2SM", "CT", "CB", "SL", "CH"), function(pt) {
+        generate_swingmiss_heatmap(df, pt)
+      })
+      print(gridExtra::grid.arrange(grobs = sm_plots, nrow = 1))
+    }
+
+    # AVG Heatmaps Row
+    cat('<div class="heatmap-row">')
+    for (pt in c("4SM", "2SM", "CT", "CB", "SL", "CH")) {
+      cat('<div class="heatmap-cell">')
+      cat(sprintf('<div class="heatmap-label">AVG %s</div>', pt))
+      cat('</div>')
+    }
+    cat('</div>')
+
+    # Generate AVG heatmaps
+    if (!is.null(df) && nrow(df) > 0) {
+      avg_plots <- lapply(c("4SM", "2SM", "CT", "CB", "SL", "CH"), function(pt) {
+        generate_slg_heatmap_batter(df, pt)
+      })
+      print(gridExtra::grid.arrange(grobs = avg_plots, nrow = 1))
+    }
+
+    # Count boxes row
+    cat('<div class="count-row">')
+    for (count in count_labels) {
+      count_data <- notes$count_data[[count]]
+      val1 <- if (!is.null(count_data) && length(count_data) >= 1) count_data[[1]] %||% "" else ""
+      val2 <- if (!is.null(count_data) && length(count_data) >= 2) count_data[[2]] %||% "" else ""
+
+      highlight <- notes$highlights[[count]] %||% "none"
+      bg_color <- highlight_colors[[highlight]] %||% "transparent"
+
+      cat(sprintf('<div class="count-box" style="background: %s;">', bg_color))
+      cat(sprintf('<div class="count-label">%s</div>', count))
+      cat('<div class="count-values">')
+      cat(sprintf('<div class="count-value">%s</div>', val1))
+      cat(sprintf('<div class="count-value">%s</div>', val2))
+      cat('</div>')
+      cat('</div>')
+    }
+    cat('</div>')
+
+    # Images + auto-generated heatmaps row
+    cat('<div class="images-row">')
+
+    # Manual upload images
+    for (img_info in list(
+      list(id = "box", label = "BOX"),
+      list(id = "contact_point", label = "CONTACT"),
+      list(id = "spray_chart", label = "SPRAY"),
+      list(id = "risp_gb", label = "RISP GB")
+    )) {
+      img_url <- notes[[paste0("img_", img_info$id)]] %||% ""
+      cat('<div class="image-cell">')
+      cat(sprintf('<div class="heatmap-label">%s</div>', img_info$label))
+      if (img_url != "") {
+        cat(sprintf('<img src="%s" />', img_url))
+      } else {
+        cat('<div class="image-placeholder">-</div>')
+      }
+      cat('</div>')
+    }
+
+    # Auto-generated heatmaps labels
+    for (label in c("EXITVELO", "POPUP", "2K MISS", "2K TAKE")) {
+      cat('<div class="image-cell">')
+      cat(sprintf('<div class="heatmap-label">%s</div>', label))
+      cat('</div>')
+    }
+    cat('</div>')
+
+    # Generate auto heatmaps
+    if (!is.null(df) && nrow(df) > 0) {
+      auto_plots <- list(
+        generate_exitvelo_heatmap(df),
+        generate_popup_heatmap(df),
+        generate_2k_miss_heatmap(df),
+        generate_2k_take_heatmap(df)
+      )
+      # Add empty plots for manual images
+      empty_plot <- ggplot() + theme_void()
+      all_plots <- c(list(empty_plot, empty_plot, empty_plot, empty_plot), auto_plots)
+      print(gridExtra::grid.arrange(grobs = all_plots, nrow = 1))
+    }
+
+    # Stats and notes row
+    cat('<div class="stats-notes-row">')
+
+    # Stats grid
+    cat('<div class="stats-grid">')
+    for (stat in list(
+      list(id = "slg", label = "SLG"),
+      list(id = "run", label = "RUN"),
+      list(id = "k", label = "K"),
+      list(id = "bb", label = "BB"),
+      list(id = "hbp", label = "HBP"),
+      list(id = "hr", label = "HR"),
+      list(id = "fly", label = "FLY%"),
+      list(id = "ground", label = "GB%")
+    )) {
+      stat_val <- notes[[paste0("stats_", stat$id)]] %||% "-"
+      cat('<div class="stat-cell">')
+      cat(sprintf('<div class="stat-label">%s</div>', stat$label))
+      cat(sprintf('<div class="stat-value">%s</div>', stat_val))
+      cat('</div>')
+    }
+    cat('</div>')
+
+    # Notes
+    cat('<div class="notes-box">')
+    cat('<div class="notes-label">NOTES</div>')
+    cat(sprintf('<div>%s</div>', notes$notes_main %||% ""))
+    cat('</div>')
+
+    # Action
+    cat('<div class="notes-box">')
+    cat('<div class="notes-label">ACTION</div>')
+    cat(sprintf('<div>%s</div>', notes$notes_action %||% ""))
+    cat('</div>')
+
+    cat('</div>')  # End stats-notes-row
+
+    cat('</div>')  # End batter-section
+  }
+
+} else {
+  cat('<div style="text-align: center; padding: 50px; color: #888;">')
+  cat('<h4>No batters loaded</h4>')
+  cat('</div>')
+}
+```
+
+<div class="footer">
+Report generated `r Sys.Date()` | Cal Poly Baseball | Print (Ctrl/Cmd + P) to save as PDF
+</div>

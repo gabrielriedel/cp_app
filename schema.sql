@@ -144,8 +144,13 @@ CREATE TABLE IF NOT EXISTS scouting_notes (
   notes_first_pitch TEXT,
   notes_hitter_adv TEXT,
   notes_2k TEXT,
+  notes_risp TEXT,
   pitch_descriptions JSONB,
   risp_images JSONB,
+  risp_usages JSONB,
+  pitcher_stats JSONB,  -- {"ip": "45.2", "era": "3.21", "k": "52", "bb": "12", "baa": ".234"}
+  pitcher_grade TEXT,
+  out_pitch TEXT,
   updated_at TIMESTAMP DEFAULT NOW(),
   UNIQUE(pitcher_name, team_name)
 );
@@ -154,6 +159,11 @@ CREATE TABLE IF NOT EXISTS scouting_notes (
 -- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS notes_gameplan TEXT;
 -- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS pitch_descriptions JSONB;
 -- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS risp_images JSONB;
+-- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS notes_risp TEXT;
+-- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS risp_usages JSONB;
+-- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS pitcher_stats JSONB;
+-- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS pitcher_grade TEXT;
+-- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS out_pitch TEXT;
 
 -- Create index for fast lookups
 CREATE INDEX IF NOT EXISTS idx_scouting_notes_pitcher
@@ -177,3 +187,42 @@ ON core_level.trackman_event(pitcherteam, batterteam);
 
 CREATE INDEX IF NOT EXISTS idx_event_batterteam
 ON core_level.trackman_event(batterteam);
+
+-- Hitter scouting notes table for opposing hitter scouting reports
+CREATE TABLE IF NOT EXISTS hitter_scouting_notes (
+  id SERIAL PRIMARY KEY,
+  batter_name TEXT NOT NULL,
+  team_name TEXT NOT NULL,  -- Composite: "TEAM_CODE::RHP" or "TEAM_CODE::LHP"
+
+  -- Count percentages (JSONB for flexibility)
+  count_data JSONB,  -- {"0-0": ["15", "20"], "0-1": ["10", "25"], ...}
+
+  -- Highlight states (JSONB)
+  highlights JSONB,  -- {"0-2": "yellow", "1-2": "yellow", ...}
+
+  -- Stats text inputs
+  stats_slg TEXT,
+  stats_run TEXT,
+  stats_k TEXT,
+  stats_bb TEXT,
+  stats_hbp TEXT,
+  stats_hr TEXT,
+  stats_fly TEXT,
+  stats_ground TEXT,
+
+  -- Notes
+  notes_main TEXT,
+  notes_action TEXT,
+
+  -- Image URLs (stored in Supabase)
+  img_box TEXT,
+  img_contact_point TEXT,
+  img_spray_chart TEXT,
+  img_risp_gb TEXT,
+
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(batter_name, team_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hitter_scouting_batter
+ON hitter_scouting_notes(batter_name, team_name);

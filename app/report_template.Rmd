@@ -13,9 +13,13 @@ params:
   arsenal: NULL
   pitch_data: NULL
   pitcher_image: NULL
-  notes: !r list(gameplan = "", attack = "", first_pitch = "", hitter_adv = "", two_k = "")
+  notes: !r list(gameplan = "", attack = "", first_pitch = "", hitter_adv = "", two_k = "", risp = "")
   pitch_descriptions: NULL
   risp_images: NULL
+  risp_usages: NULL
+  pitcher_stats: !r list(ip = "", era = "", k = "", bb = "", baa_lhh = "", baa_rhh = "")
+  grade: ""
+  out_pitch: ""
 ---
 
 ```{r setup, include=FALSE}
@@ -24,8 +28,47 @@ library(tidyverse)
 library(kableExtra)
 library(viridisLite)
 
-# Helper function to generate heatmap
-generate_heatmap_pdf <- function(df, pitch_type = NULL, title = "") {
+# Pitch type color scheme
+get_pitch_color <- function(pitch_type) {
+  pt_upper <- toupper(pitch_type)
+  colors <- list(
+    "FASTBALL" = list(bg = "#fee2e2", text = "#dc2626"),
+    "FB" = list(bg = "#fee2e2", text = "#dc2626"),
+    "FOUR-SEAM" = list(bg = "#fee2e2", text = "#dc2626"),
+    "CHANGEUP" = list(bg = "#dcfce7", text = "#16a34a"),
+    "CH" = list(bg = "#dcfce7", text = "#16a34a"),
+    "SLIDER" = list(bg = "#dbeafe", text = "#2563eb"),
+    "SL" = list(bg = "#dbeafe", text = "#2563eb"),
+    "CURVEBALL" = list(bg = "#f3e8ff", text = "#9333ea"),
+    "CB" = list(bg = "#f3e8ff", text = "#9333ea"),
+    "CU" = list(bg = "#f3e8ff", text = "#9333ea"),
+    "CUTTER" = list(bg = "#ffedd5", text = "#ea580c"),
+    "FC" = list(bg = "#ffedd5", text = "#ea580c"),
+    "SINKER" = list(bg = "#fef3c7", text = "#d97706"),
+    "SI" = list(bg = "#fef3c7", text = "#d97706"),
+    "SPLITTER" = list(bg = "#ccfbf1", text = "#0d9488"),
+    "FS" = list(bg = "#ccfbf1", text = "#0d9488"),
+    "SWEEPER" = list(bg = "#e0e7ff", text = "#4f46e5")
+  )
+  if (pt_upper %in% names(colors)) colors[[pt_upper]] else list(bg = "#f3f4f6", text = "#374151")
+}
+
+# Nadaraya-Watson 2D kernel regression
+nadaraya_watson_2d <- function(x, y, values, bw = 0.55, n = 60,
+                                xlim = c(-2, 2), ylim = c(-0.5, 4.5)) {
+  x_grid <- seq(xlim[1], xlim[2], length.out = n)
+  y_grid <- seq(ylim[1], ylim[2], length.out = n)
+  grid <- expand.grid(gx = x_grid, gy = y_grid)
+  dx_mat <- outer(grid$gx, x, FUN = "-")
+  dy_mat <- outer(grid$gy, y, FUN = "-")
+  K <- exp(-(dx_mat^2 + dy_mat^2) / (2 * bw^2))
+  denom <- rowSums(K)
+  grid$value <- ifelse(denom < 1e-6, NA_real_, as.vector(K %*% values) / denom)
+  grid
+}
+
+# Helper function to generate per-pitch location heatmap (overall attack rows)
+generate_heatmap_pdf <- function(df, pitch_type = NULL, title = "", pct = NULL) {
   plot_data <- if (!is.null(pitch_type) && "pitch_type_display" %in% names(df)) {
     df |> filter(pitch_type_display == pitch_type)
   } else if (!is.null(pitch_type)) {
@@ -39,9 +82,10 @@ generate_heatmap_pdf <- function(df, pitch_type = NULL, title = "") {
   if (nrow(plot_data) < 3) {
     return(
       ggplot() +
-        annotate("text", x = 0, y = 2.5, label = "N/A", size = 4) +
+        annotate("text", x = 0, y = 2.5, label = "N/A", size = 3) +
         theme_void() +
-        labs(title = title)
+        labs(title = title) +
+        theme(plot.title = element_text(hjust = 0.5, size = 7, face = "bold"))
     )
   }
 
@@ -54,20 +98,24 @@ generate_heatmap_pdf <- function(df, pitch_type = NULL, title = "") {
       geom = "raster",
       contour = FALSE,
       h = c(0.55, 0.55),
-      n = 100
+      n = 80
     ) +
     scale_fill_gradientn(colors = cols, guide = "none") +
     annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5,
-             fill = NA, color = "black", linewidth = 0.8) +
-    annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black") +
-    annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-    coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
+             fill = NA, color = "black", linewidth = 0.6) +
+    annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black", linewidth = 0.4) +
+    annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black", linewidth = 0.4) +
+    annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black", linewidth = 0.4) +
+    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black", linewidth = 0.4) +
+    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black", linewidth = 0.4) +
+    coord_fixed(xlim = c(-2, 2), ylim = c(0.75, 4.25), expand = FALSE) +
     labs(title = title) +
     theme_void() +
-    theme(plot.title = element_text(hjust = 0.5, size = 9, face = "bold"))
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 8, face = "bold", color = "#1e3a5f"),
+      plot.background = element_rect(fill = "white", color = NA),
+      plot.margin = margin(2, 2, 2, 2)
+    )
 }
 
 # Get pitch usage for a filtered dataset
@@ -78,84 +126,125 @@ get_pitch_usage <- function(df) {
     arrange(desc(n))
 }
 
+# Colored header grob for a pitch type (matches RISP badge style)
+make_header_grob <- function(pt, pct = NULL) {
+  colors <- get_pitch_color(pt)
+  label <- if (!is.null(pct) && !is.na(pct)) paste0(pt, " (", pct, "%)") else pt
+  grid::grobTree(
+    grid::rectGrob(gp = grid::gpar(fill = colors$bg, col = NA)),
+    grid::textGrob(label, gp = grid::gpar(col = colors$text, fontface = "bold", fontsize = 9))
+  )
+}
+
+# Blank placeholder grob for empty pitch slots (keeps columns aligned)
+make_blank_grob <- function() {
+  grid::rectGrob(gp = grid::gpar(col = NA, fill = NA))
+}
+
+# Reorder situation usage to match the canonical arsenal order (fastball first, then overall usage)
+order_by_canonical <- function(df, canonical_pts, max_pitches = 6) {
+  usage <- df |>
+    count(pitch_type_display) |>
+    mutate(pct = round(n / sum(n) * 100, 0))
+  data.frame(pitch_type_display = canonical_pts, stringsAsFactors = FALSE) |>
+    dplyr::left_join(usage, by = "pitch_type_display") |>
+    dplyr::filter(!is.na(n)) |>
+    head(max_pitches)
+}
+
 # Calculate zone percentage
 calculate_zone_pct_report <- function(df) {
   if (nrow(df) == 0) return(NA_real_)
-  zone_left <- -0.83
-  zone_right <- 0.83
-  zone_bottom <- 1.5
-  zone_top <- 3.5
   in_zone <- df |>
-    filter(
-      platelocside >= zone_left,
-      platelocside <= zone_right,
-      platelocheight >= zone_bottom,
-      platelocheight <= zone_top
-    ) |>
+    filter(platelocside >= -0.83, platelocside <= 0.83,
+           platelocheight >= 1.5, platelocheight <= 3.5) |>
     nrow()
   round(in_zone / nrow(df) * 100, 0)
 }
 
-# Generate SLG heatmap - shows density of hits
-generate_slg_heatmap_report <- function(df, title = "SLG by Zone") {
-  hit_df <- df |>
-    filter(pitchcall == "InPlay" & !is.na(platelocside) & !is.na(platelocheight)) |>
-    filter(playresult %in% c("Single", "SIngle", "Double", "Triple", "triple", "HomeRun", "Homerun"))
-  if (nrow(hit_df) < 3) {
-    return(ggplot() + annotate("text", x = 0, y = 2.5, label = "N/A", size = 4) +
-           theme_void() + labs(title = title))
+# Generate SLG heatmap (NW regression, compact)
+generate_slg_heatmap_report <- function(df, title = "Damage") {
+  valid_df <- df |> filter(!is.na(platelocside), !is.na(platelocheight))
+  if (nrow(valid_df) < 5) {
+    return(ggplot() + annotate("text", x = 0, y = 2.5, label = "N/A", size = 3) +
+           theme_void() + labs(title = title) +
+           theme(plot.title = element_text(hjust = 0.5, size = 8, face = "bold", color = "#991b1b")))
   }
+  slg_weights <- dplyr::case_when(
+    valid_df$playresult %in% c("HomeRun", "Homerun") ~ 4,
+    valid_df$playresult %in% c("Triple", "triple") ~ 3,
+    valid_df$playresult == "Double" ~ 2,
+    valid_df$playresult %in% c("Single", "SIngle") ~ 1,
+    TRUE ~ 0
+  )
+  grid_df <- nadaraya_watson_2d(valid_df$platelocside, valid_df$platelocheight, slg_weights, bw = 0.30, n = 80)
   cols <- viridisLite::turbo(256)
   cols[1] <- "white"
-  ggplot(hit_df, aes(x = platelocside, y = platelocheight)) +
-    stat_density_2d(aes(fill = after_stat(ndensity)), geom = "raster", contour = FALSE, h = c(0.55, 0.55), n = 80) +
-    scale_fill_gradientn(colors = cols, guide = "none") +
+  ggplot() +
+    geom_raster(data = grid_df, aes(x = gx, y = gy, fill = value)) +
+    scale_fill_gradientn(colors = cols, na.value = "white", guide = "none") +
+    geom_point(data = valid_df, aes(x = platelocside, y = platelocheight),
+               color = "white", size = 0.25, alpha = 0.35, inherit.aes = FALSE) +
     annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5,
-             fill = NA, color = "black", linewidth = 0.8) +
-    annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black") +
-    annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-    coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
+             fill = NA, color = "black", linewidth = 0.5) +
+    annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black", linewidth = 0.4) +
+    annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black", linewidth = 0.4) +
+    annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black", linewidth = 0.4) +
+    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black", linewidth = 0.4) +
+    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black", linewidth = 0.4) +
+    coord_fixed(xlim = c(-2, 2), ylim = c(0.75, 4.25), expand = FALSE) +
     labs(title = title) +
     theme_void() +
-    theme(plot.title = element_text(hjust = 0.5, size = 9, face = "bold"))
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 8, face = "bold", color = "#991b1b"),
+      plot.margin = margin(0, 0, 0, 0)
+    )
 }
 
-# Generate Whiff Heatmap - shows density of swinging strikes (same as SLG)
-generate_whiff_heatmap_report <- function(df, title = "Whiffs") {
-  whiff_df <- df |>
-    filter(pitchcall == "StrikeSwinging" & !is.na(platelocside) & !is.na(platelocheight))
-  if (nrow(whiff_df) < 3) {
-    return(ggplot() + annotate("text", x = 0, y = 2.5, label = "N/A", size = 4) +
-           theme_void() + labs(title = title))
+# Generate Whiff heatmap (NW regression, compact)
+generate_whiff_heatmap_report <- function(df, title = "Swing & Miss") {
+  valid_df <- df |> filter(!is.na(platelocside), !is.na(platelocheight))
+  if (nrow(valid_df) < 5) {
+    return(ggplot() + annotate("text", x = 0, y = 2.5, label = "N/A", size = 3) +
+           theme_void() + labs(title = title) +
+           theme(plot.title = element_text(hjust = 0.5, size = 8, face = "bold", color = "#1e3a5f")))
   }
+  is_whiff <- as.numeric(valid_df$pitchcall == "StrikeSwinging")
+  grid_df <- nadaraya_watson_2d(valid_df$platelocside, valid_df$platelocheight, is_whiff, bw = 0.30, n = 80)
   cols <- viridisLite::turbo(256)
   cols[1] <- "white"
-  ggplot(whiff_df, aes(x = platelocside, y = platelocheight)) +
-    stat_density_2d(aes(fill = after_stat(ndensity)), geom = "raster", contour = FALSE, h = c(0.55, 0.55), n = 80) +
-    scale_fill_gradientn(colors = cols, guide = "none") +
+  ggplot() +
+    geom_raster(data = grid_df, aes(x = gx, y = gy, fill = value)) +
+    scale_fill_gradientn(colors = cols, na.value = "white", guide = "none") +
+    geom_point(data = valid_df, aes(x = platelocside, y = platelocheight),
+               color = "white", size = 0.25, alpha = 0.35, inherit.aes = FALSE) +
     annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5,
-             fill = NA, color = "black", linewidth = 0.8) +
-    annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black") +
-    annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-    coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
+             fill = NA, color = "black", linewidth = 0.5) +
+    annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black", linewidth = 0.4) +
+    annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black", linewidth = 0.4) +
+    annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black", linewidth = 0.4) +
+    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black", linewidth = 0.4) +
+    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black", linewidth = 0.4) +
+    coord_fixed(xlim = c(-2, 2), ylim = c(0.75, 4.25), expand = FALSE) +
     labs(title = title) +
     theme_void() +
-    theme(plot.title = element_text(hjust = 0.5, size = 9, face = "bold"))
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 8, face = "bold", color = "#1e3a5f"),
+      plot.margin = margin(0, 0, 0, 0)
+    )
 }
 
-# Calculate pitcher info
+# Calculate pitcher info — extension and release height use fastballs/sinkers only
 pitcher_info <- if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
   df <- params$pitch_data
+  fb_types <- c("Fastball", "FourSeamFastBall", "TwoSeamFastBall", "OneSeamFastBall", "Sinker")
+  fb_df <- df |> filter(pitch_type_display %in% fb_types |
+                          grepl("fastball|sinker", pitch_type_display, ignore.case = TRUE))
+  mech_df <- if (nrow(fb_df) >= 3) fb_df else df  # fall back to all pitches if no FB data
   list(
-    extension = sprintf("%.1f ft", mean(df$extension, na.rm = TRUE)),
-    rel_height = sprintf("%.1f ft", mean(df$relheight, na.rm = TRUE)),
-    throws = if(mean(df$relside, na.rm = TRUE) > 0) "RHP" else "LHP"
+    extension  = sprintf("%.1f", mean(mech_df$extension,  na.rm = TRUE)),
+    rel_height = sprintf("%.1f", mean(mech_df$relheight,  na.rm = TRUE)),
+    throws     = if (mean(df$relside, na.rm = TRUE) > 0) "RHP" else "LHP"
   )
 } else {
   list(extension = "N/A", rel_height = "N/A", throws = "N/A")
@@ -163,22 +252,17 @@ pitcher_info <- if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) 
 ```
 
 <style>
-/* Base styles */
+/* Compact single-page layout */
 body {
   font-family: Arial, sans-serif;
   font-size: 11px;
   margin: 0;
-  padding: 10px;
+  padding: 5px;
   max-width: 100%;
 }
 
-/* Print-specific styles */
 @media print {
-  @page {
-    size: letter;
-    margin: 0.4in;
-  }
-
+  @page { size: letter; margin: 0.25in; }
   body {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
@@ -186,428 +270,447 @@ body {
     padding: 0;
     margin: 0;
   }
-
-  /* Prevent page breaks inside these elements */
-  .header-box,
-  .arsenal-section,
-  .heatmap-section {
-    page-break-inside: avoid;
-  }
-
-  /* Force page break before page 2 content */
-  .page-break-before {
-    page-break-before: always;
-  }
-
-  /* Ensure sections stay together */
-  .section-header {
-    page-break-after: avoid;
-  }
-
-  .heatmap-row {
-    page-break-inside: avoid;
-  }
-
-  /* Hide hover effects in print */
-  .arsenal-table tr:hover {
-    background: inherit;
-  }
-
-  /* Compact spacing for print */
-  .section-header {
-    margin: 8px 0 6px 0;
-    padding: 5px 10px;
-  }
-
-  .heatmap-row {
-    margin-bottom: 6px;
-  }
-
-  .notes-box {
-    min-height: 80px;
-    padding: 5px;
-    font-size: 9px;
-  }
-
-  /* Hide footer or make it subtle */
-  .footer {
-    margin-top: 10px;
-    padding-top: 5px;
-  }
-
-  /* Ensure images don't overflow */
-  img {
-    max-width: 100%;
-    height: auto;
-  }
+  .no-break { page-break-inside: avoid; }
 }
 
 .header-box {
   background: #1a365d;
   color: white;
-  padding: 10px 15px;
-  margin-bottom: 10px;
-  border-radius: 4px;
+  padding: 6px 10px;
+  margin-bottom: 5px;
+  border-radius: 3px;
 }
-.header-box h1 {
-  margin: 0;
-  font-size: 18px;
-}
-.header-box .subtitle {
-  font-size: 11px;
-  opacity: 0.9;
-}
-.arsenal-section {
-  margin-bottom: 10px;
-}
+.header-box h1 { margin: 0; font-size: 16px; }
+.header-box .subtitle { font-size: 11px; opacity: 0.9; }
+
 .arsenal-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
-  margin-bottom: 10px;
+  font-size: 11px;
 }
 .arsenal-table th {
   background: #2d3748;
   color: white;
-  padding: 8px 6px;
+  padding: 4px 5px;
   text-align: center;
-  font-weight: 600;
-  font-size: 12px;
+  font-size: 10px;
 }
 .arsenal-table td {
-  padding: 6px;
+  padding: 3px 5px;
   text-align: center;
   border-bottom: 1px solid #e2e8f0;
-  font-size: 12px;
+  font-size: 11px;
 }
-.arsenal-table tr:nth-child(even) {
-  background: #f7fafc;
-}
-.arsenal-table tr:hover {
+.arsenal-table tr.footer-row td {
   background: #edf2f7;
+  font-weight: bold;
+  font-size: 10px;
+  border-top: 2px solid #4a5568;
 }
+
 .section-header {
   background: #4a5568;
   color: white;
-  padding: 6px 12px;
-  margin: 10px 0 6px 0;
+  padding: 3px 8px;
+  margin: 3px 0 2px 0;
   font-weight: 600;
   font-size: 11px;
-  border-radius: 3px;
+  border-radius: 2px;
 }
-.heatmap-section {
-  margin-bottom: 8px;
-}
+
 .heatmap-row {
   display: flex;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: 4px;
+  margin-bottom: 2px;
   align-items: flex-start;
 }
+
 .notes-box {
   background: #fffbeb;
   border: 1px solid #f6e05e;
-  border-radius: 4px;
-  padding: 6px;
-  min-width: 130px;
-  max-width: 140px;
+  border-radius: 3px;
+  padding: 3px 5px;
+  min-width: 90px;
+  max-width: 100px;
   font-size: 9px;
-  min-height: 100px;
+  min-height: 45px;
 }
 .notes-box strong {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   color: #744210;
   font-size: 10px;
 }
-.heatmap-container {
+
+.stat-box {
+  background: #e2e8f0;
+  border-radius: 3px;
+  padding: 4px 6px;
   text-align: center;
+  margin-bottom: 3px;
 }
+.stat-label { font-size: 9px; color: #4a5568; }
+.stat-value { font-size: 13px; font-weight: bold; color: #1a365d; }
+
+.grade-box {
+  background: #fffbeb;
+  border: 1px solid #f6e05e;
+  border-radius: 3px;
+  padding: 4px 6px;
+  text-align: center;
+  margin-bottom: 3px;
+}
+.grade-label { font-size: 9px; color: #744210; }
+.grade-value { font-size: 13px; font-weight: bold; color: #744210; }
+
+.heatmap-label {
+  background: #2d3748;
+  color: white;
+  padding: 3px 4px;
+  font-size: 10px;
+  font-weight: bold;
+  text-align: center;
+  border-radius: 2px;
+  margin-bottom: 2px;
+}
+
+
+.pitch-header {
+  text-align: center;
+  padding: 3px 6px;
+  border-radius: 3px;
+  font-weight: bold;
+  font-size: 10px;
+  margin-bottom: 2px;
+}
+
 .footer {
-  margin-top: 15px;
-  padding-top: 8px;
+  margin-top: 5px;
+  padding-top: 3px;
   border-top: 1px solid #e2e8f0;
-  font-size: 8px;
+  font-size: 9px;
   color: #718096;
   text-align: center;
 }
-
-/* Two-page layout helper */
-.page-1 {
-  min-height: auto;
-}
-.page-2 {
-  min-height: auto;
-}
 </style>
 
-```{r header-image, results='asis', echo=FALSE}
+```{r header, results='asis', echo=FALSE}
 cat('<div class="header-box">')
-cat(sprintf('<h1 style="margin: 0;">%s | %s</h1>', params$pitcher, params$team))
-split_text <- if(params$split == "Both") "All Batters" else if(params$split == "Left") "vs LHH" else "vs RHH"
-cat(sprintf('<div class="subtitle">%s | Extension: %s | Release Height: %s | Split: %s</div>',
-            pitcher_info$throws, pitcher_info$extension, pitcher_info$rel_height, split_text))
+split_text <- if (params$split == "Left") "vs LHH" else "vs RHH"
+cat(sprintf('<h1>%s <span style="font-size:11px; font-weight:normal; opacity:0.85;">| %s</span> <span style="font-size:11px; background:rgba(255,255,255,0.2); border-radius:3px; padding:1px 6px; margin-left:4px;">%s</span></h1>',
+            params$pitcher, params$team, split_text))
 cat('</div>')
 ```
 
-<!-- PAGE 1: Arsenal + Overall + First Pitch -->
-<div class="page-1">
+<!-- Main content area -->
+<div class="no-break">
 
-<div class="arsenal-section">
-<h4 style="margin: 0 0 8px 0; color: #2d3748; font-size: 13px; border-bottom: 2px solid #2d3748; padding-bottom: 4px;">PITCH ARSENAL</h4>
-<table style="width: 100%; border-collapse: collapse; table-layout: fixed;">
+<!-- Top section: 3-column layout -->
+<table style="width: 100%; border-collapse: collapse; margin-bottom: 5px;">
 <tr>
-<td style="vertical-align: top; padding-right: 15px;">
-```{r arsenal-table, results='asis', echo=FALSE}
-# Output arsenal table
-if (!is.null(params$arsenal) && nrow(params$arsenal) > 0) {
-  arsenal_display <- params$arsenal |>
-    mutate(
-      usage = paste0(usage, "%"),
-      zone_pct_styled = ifelse(zone_pct < 40,
-        paste0('<span style="color: darkred; font-weight: bold; background: rgba(255,200,200,0.8); padding: 2px 4px;">', zone_pct, '%</span>'),
-        paste0(zone_pct, '%'))
-    ) |>
-    select(pitch_type, usage, velo, zone_pct_styled, ivb, hb)
 
-  print(kable(arsenal_display,
-        col.names = c("Pitch Type", "Usage", "Velo", "Zone%", "IVB", "HB"),
-        align = "c",
-        format = "html",
-        escape = FALSE,
-        table.attr = 'class="arsenal-table"') |>
-    kable_styling(bootstrap_options = c("striped", "hover"), full_width = TRUE))
-} else {
-  cat("<p>No arsenal data available.</p>")
-}
-```
+<!-- LEFT COLUMN: Pitcher image, ext, rel, grade, out pitch (~18%) -->
+<td style="width: 18%; vertical-align: top; padding-right: 6px; border-right: 1px solid #e2e8f0;">
 
-<table style="width: 100%; border-collapse: collapse; height: 280px; margin-top: 8px;">
-<tr>
-<td style="width: 160px; vertical-align: top; padding-right: 10px;">
-<div style="display: flex; flex-direction: column; gap: 6px;">
-
-```{r pitcher-image, results='asis', echo=FALSE}
+```{r left-pitcher-image, results='asis', echo=FALSE}
 if (!is.null(params$pitcher_image) && params$pitcher_image != "") {
-  cat(sprintf('<img src="%s" style="width: 150px; height: 200px; object-fit: cover; border-radius: 6px; border: 2px solid #1a365d;" />', params$pitcher_image))
+  cat(sprintf('<div style="text-align:center; margin-bottom:4px;"><img src="%s" style="width:100%%; max-width:90px; height:110px; object-fit:cover; border-radius:4px; border:1px solid #1a365d;" /></div>', params$pitcher_image))
 } else {
-  cat('<div style="width: 150px; height: 200px; background: #f0f0f0; border-radius: 6px; display: flex; align-items: center; justify-content: center;"><span style="color: #888; font-size: 10px;">No image</span></div>')
+  cat('<div style="width:100%; height:70px; background:#eee; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:7px; color:#888; margin-bottom:4px; text-align:center;">No image</div>')
 }
 ```
 
-<div style="background: #e2e8f0; border-radius: 4px; padding: 6px; text-align: center;">
-<div style="font-size: 9px; color: #4a5568; margin-bottom: 2px;">EXTENSION</div>
-<div style="font-size: 14px; font-weight: bold; color: #1a365d;">`r pitcher_info$extension`</div>
-</div>
-<div style="background: #e2e8f0; border-radius: 4px; padding: 6px; text-align: center;">
-<div style="font-size: 9px; color: #4a5568; margin-bottom: 2px;">REL HEIGHT</div>
-<div style="font-size: 14px; font-weight: bold; color: #1a365d;">`r pitcher_info$rel_height`</div>
-</div>
-</div>
-</td>
-<td style="vertical-align: top;">
-<div style="background: #fffbeb; border: 1px solid #f6e05e; border-radius: 4px; padding: 10px; height: 100%; min-height: 260px; box-sizing: border-box;">
-<strong style="color: #744210; font-size: 12px; display: block; margin-bottom: 6px;">GAMEPLAN NOTES</strong>
-<p style="margin: 0; font-size: 11px; white-space: pre-wrap; line-height: 1.4;">`r if(!is.null(params$notes$gameplan) && params$notes$gameplan != "") params$notes$gameplan else "No gameplan notes"`</p>
-</div>
-</td>
-</tr>
-</table>
-</td>
-<td style="width: 160px; vertical-align: top;">
-```{r slg-heatmap, fig.height=1.6, fig.width=1.6, out.width="100%"}
-if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
-  generate_slg_heatmap_report(params$pitch_data, "Hits")
-}
-```
-```{r whiff-heatmap, fig.height=1.6, fig.width=1.6, out.width="100%"}
-if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
-  generate_whiff_heatmap_report(params$pitch_data, "Whiffs")
-}
-```
-<div style="background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 6px; text-align: center; flex: 1; display: flex; flex-direction: column; justify-content: center;">
-<strong style="font-size: 10px;">Zone %</strong>
-```{r zone-pct, results='asis'}
-if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
-  zone_pct <- calculate_zone_pct_report(params$pitch_data)
-  zone_color <- if (!is.na(zone_pct) && zone_pct < 40) "darkred" else "#2d3748"
-  cat(sprintf('<p style="font-size: 22px; font-weight: bold; color: %s; margin: 4px 0;">%s%%</p>', zone_color, zone_pct))
-} else {
-  cat('<p style="font-size: 22px; font-weight: bold; margin: 4px 0;">N/A</p>')
-}
-```
-</div>
-</td>
-</tr>
-</table>
+<div style="display:flex; gap:3px; margin-bottom:3px;">
+<div class="stat-box" style="flex:1; margin-bottom:0;"><div class="stat-label">EXT</div><div class="stat-value">`r pitcher_info$extension`</div></div>
+<div class="stat-box" style="flex:1; margin-bottom:0;"><div class="stat-label">REL HT</div><div class="stat-value">`r pitcher_info$rel_height`</div></div>
 </div>
 
-<div class="heatmap-section">
+```{r left-grade, results='asis', echo=FALSE}
+grade_val <- if (!is.null(params$grade) && params$grade != "") params$grade else ""
+out_pitch_val <- if (!is.null(params$out_pitch) && params$out_pitch != "") params$out_pitch else ""
+
+cat('<div style="display:flex; gap:3px;">')
+if (grade_val != "") {
+  cat(sprintf('<div class="grade-box" style="flex:1; margin-bottom:0;"><div class="grade-label">MIX</div><div class="grade-value">%s</div></div>', grade_val))
+} else {
+  cat('<div class="grade-box" style="flex:1; margin-bottom:0;"><div class="grade-label">MIX</div><div class="grade-value" style="color:#aaa;">—</div></div>')
+}
+if (out_pitch_val != "") {
+  cat(sprintf('<div class="grade-box" style="flex:1; margin-bottom:0;"><div class="grade-label">OUT PITCH</div><div class="grade-value">%s</div></div>', out_pitch_val))
+} else {
+  cat('<div class="grade-box" style="flex:1; margin-bottom:0;"><div class="grade-label">OUT PITCH</div><div class="grade-value" style="color:#aaa;">—</div></div>')
+}
+cat('</div>')
+```
+
+</td>
+
+<!-- MIDDLE COLUMN: Pitch table + footer stats + Attack Notes (~50%) -->
+<td style="width: 50%; vertical-align: top; padding: 0 6px;">
+
+```{r arsenal-table, results='asis', echo=FALSE}
+if (!is.null(params$arsenal) && nrow(params$arsenal) > 0) {
+  pitch_descs <- params$pitch_descriptions
+  if (!is.list(pitch_descs)) pitch_descs <- as.list(pitch_descs)
+  stats <- params$pitcher_stats
+
+  # Overall zone % for footer
+  overall_zone <- if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
+    calculate_zone_pct_report(params$pitch_data)
+  } else NA_real_
+
+  # Build table HTML manually for full control
+  cat('<table class="arsenal-table">')
+  cat('<thead><tr>')
+  cat('<th>Pitch</th><th>Usage</th><th>Velo</th><th>Zone%</th><th>Type</th><th>IVB</th><th>HB</th><th>Shape</th>')
+  cat('</tr></thead>')
+  cat('<tbody>')
+
+  for (i in seq_len(nrow(params$arsenal))) {
+    pt <- params$arsenal$pitch_type[i]
+    colors <- get_pitch_color(pt)
+    badge <- sprintf('<span style="background:%s; color:%s; padding:1px 5px; border-radius:2px; font-weight:bold; font-size:8px;">%s</span>',
+                     colors$bg, colors$text, pt)
+    usage_pct <- paste0(params$arsenal$usage[i], "%")
+    zone_val <- params$arsenal$zone_pct[i]
+    zone_disp <- if (!is.na(zone_val) && zone_val < 40) {
+      sprintf('<span style="color:darkred;font-weight:bold;">%s%%</span>', zone_val)
+    } else {
+      paste0(zone_val, "%")
+    }
+    desc <- ""
+    if (!is.null(pitch_descs) && length(pitch_descs) > 0 && pt %in% names(pitch_descs)) {
+      val <- pitch_descs[[pt]]
+      if (!is.null(val) && length(val) > 0) desc <- as.character(val[1])
+    }
+    cat(sprintf('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td style="text-align:left;">%s</td></tr>',
+                badge, usage_pct, params$arsenal$velo[i], zone_disp,
+                badge,
+                params$arsenal$ivb[i], params$arsenal$hb[i], htmltools::htmlEscape(desc)))
+  }
+
+  # Footer row: Overall Zone% + Stats
+  has_stats <- !is.null(stats) && (stats$ip != "" || stats$era != "" || stats$k != "" || stats$bb != "")
+  zone_footer <- if (!is.na(overall_zone)) paste0("Zone: ", overall_zone, "%") else "Zone: N/A"
+  stats_str <- if (has_stats) {
+    parts <- c()
+    if (!is.null(stats$ip) && stats$ip != "") parts <- c(parts, paste0("IP: ", stats$ip))
+    if (!is.null(stats$era) && stats$era != "") parts <- c(parts, paste0("ERA: ", stats$era))
+    if (!is.null(stats$k) && stats$k != "") parts <- c(parts, paste0("K: ", stats$k))
+    if (!is.null(stats$bb) && stats$bb != "") parts <- c(parts, paste0("BB: ", stats$bb))
+    if (params$split == "Left"  && !is.null(stats$baa_lhh) && stats$baa_lhh != "") parts <- c(parts, paste0("BAA-L: ", stats$baa_lhh))
+    if (params$split == "Right" && !is.null(stats$baa_rhh) && stats$baa_rhh != "") parts <- c(parts, paste0("BAA-R: ", stats$baa_rhh))
+    paste(parts, collapse = "  |  ")
+  } else ""
+
+  footer_text <- if (stats_str != "") paste0(zone_footer, "  |  ", stats_str) else zone_footer
+  cat(sprintf('<tr class="footer-row"><td colspan="8" style="text-align:left; padding: 3px 4px;">%s</td></tr>', footer_text))
+
+  cat('</tbody></table>')
+}
+```
+
+```{r attack-notes, results='asis', echo=FALSE}
+# Gameplan section fills lower half of middle column
+gameplan_val <- if (!is.null(params$notes$gameplan) && params$notes$gameplan != "") params$notes$gameplan else ""
+cat('<div style="background:#fffbeb; border:1px solid #f6e05e; border-radius:3px; padding:4px 6px; margin-top:4px; min-height:60px;">')
+cat('<div style="font-weight:bold; color:#744210; font-size:8px; margin-bottom:4px;">GAMEPLAN</div>')
+cat(sprintf('<div style="font-size:8px; line-height:1.4; white-space:pre-wrap; color:#1a202c;">%s</div>',
+            if (gameplan_val != "") htmltools::htmlEscape(gameplan_val) else "\u2014"))
+cat('</div>')
+```
+
+</td>
+
+<!-- RIGHT COLUMN: Damage + Swing & Miss heatmaps (~32%) -->
+<td style="width: 32%; vertical-align: top; padding-left: 6px; border-left: 1px solid #e2e8f0;">
+
+<table style="width: 100%; border-collapse: collapse;">
+<tr>
+<td style="width: 50%; text-align: center; vertical-align: top; padding: 0 2px;">
+<div class="heatmap-label">DAMAGE</div>
+```{r damage-heatmap, fig.height=1.4, fig.width=1.4, out.width="98%"}
+if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
+  generate_slg_heatmap_report(params$pitch_data, "")
+}
+```
+</td>
+<td style="width: 50%; text-align: center; vertical-align: top; padding: 0 2px;">
+<div class="heatmap-label">SWING &amp; MISS</div>
+```{r whiff-heatmap, fig.height=1.4, fig.width=1.4, out.width="98%"}
+if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
+  generate_whiff_heatmap_report(params$pitch_data, "")
+}
+```
+</td>
+</tr>
+</table>
+
+</td>
+</tr>
+</table>
+
+</div>
+
+<!-- Heatmap sections with colored headers -->
 <div class="section-header">OVERALL ATTACK</div>
 <div class="heatmap-row">
-<div class="notes-box">
-<strong>Notes:</strong>
-`r if(!is.null(params$notes$attack) && params$notes$attack != "") params$notes$attack else "No notes"`
-</div>
-```{r overall-heatmaps, fig.height=1.8, fig.width=10, out.width="78%"}
+<div class="notes-box"><strong>Notes:</strong>`r if(!is.null(params$notes$attack) && params$notes$attack != "") params$notes$attack else ""`</div>
+```{r overall-heatmaps, fig.height=1.6, fig.width=8, out.width="85%"}
 if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
   df <- params$pitch_data
-  usage <- get_pitch_usage(df)
-  top_pitches <- head(usage, 6)  # Max 6 per row for layout
-  if (nrow(top_pitches) > 0) {
-    plots <- lapply(seq_len(nrow(top_pitches)), function(i) {
-      pt <- top_pitches$pitch_type_display[i]
-      pct <- top_pitches$pct[i]
-      generate_heatmap_pdf(df, pt, paste0(pt, " (", pct, "%)"))
-    })
-    gridExtra::grid.arrange(grobs = plots, nrow = 1)
-  }
+  canonical_pts <- head(params$arsenal$pitch_type, 4)
+  ncols <- length(canonical_pts)
+  usage <- df |> count(pitch_type_display) |> mutate(pct = round(n / sum(n) * 100, 0))
+  headers <- lapply(canonical_pts, function(pt) {
+    row <- usage[usage$pitch_type_display == pt, ]
+    if (nrow(row) > 0) make_header_grob(pt, row$pct[1]) else make_blank_grob()
+  })
+  plots <- lapply(canonical_pts, function(pt) {
+    row <- usage[usage$pitch_type_display == pt, ]
+    if (nrow(row) > 0) generate_heatmap_pdf(df, pt, "") else make_blank_grob()
+  })
+  gridExtra::grid.arrange(grobs = c(headers, plots), ncol = ncols, nrow = 2,
+    heights = grid::unit(c(0.22, 1.3), "in"))
 }
 ```
 </div>
-</div>
 
-<div class="heatmap-section">
 <div class="section-header">FIRST PITCH (0-0)</div>
 <div class="heatmap-row">
-<div class="notes-box">
-<strong>Notes:</strong>
-`r if(!is.null(params$notes$first_pitch) && params$notes$first_pitch != "") params$notes$first_pitch else "No notes"`
-</div>
-```{r first-pitch-heatmaps, fig.height=1.8, fig.width=10, out.width="78%"}
+<div class="notes-box"><strong>Notes:</strong>`r if(!is.null(params$notes$first_pitch) && params$notes$first_pitch != "") params$notes$first_pitch else ""`</div>
+```{r first-pitch-heatmaps, fig.height=1.6, fig.width=8, out.width="85%"}
 if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
   df <- params$pitch_data |> filter(balls == 0 & strikes == 0)
   if (nrow(df) >= 3) {
-    usage <- get_pitch_usage(df)
-    top_pitches <- head(usage, 6)  # Max 6 per row for layout
-    if (nrow(top_pitches) > 0) {
-      plots <- lapply(seq_len(nrow(top_pitches)), function(i) {
-        pt <- top_pitches$pitch_type_display[i]
-        pct <- top_pitches$pct[i]
-        generate_heatmap_pdf(df, pt, paste0(pt, " (", pct, "%)"))
-      })
-      gridExtra::grid.arrange(grobs = plots, nrow = 1)
-    }
-  } else {
-    cat("Insufficient first pitch data")
+    canonical_pts <- head(params$arsenal$pitch_type, 4)
+    ncols <- length(canonical_pts)
+    usage <- df |> count(pitch_type_display) |> mutate(pct = round(n / sum(n) * 100, 0))
+    headers <- lapply(canonical_pts, function(pt) {
+      row <- usage[usage$pitch_type_display == pt, ]
+      if (nrow(row) > 0) make_header_grob(pt, row$pct[1]) else make_blank_grob()
+    })
+    plots <- lapply(canonical_pts, function(pt) {
+      row <- usage[usage$pitch_type_display == pt, ]
+      if (nrow(row) > 0) generate_heatmap_pdf(df, pt, "") else make_blank_grob()
+    })
+    gridExtra::grid.arrange(grobs = c(headers, plots), ncol = ncols, nrow = 2,
+      heights = grid::unit(c(0.22, 1.3), "in"))
   }
 }
 ```
 </div>
-</div>
 
-</div>
-
-<!-- PAGE 2: Hitter Advantage + 2K -->
-<div class="page-2 page-break-before">
-
-<div class="heatmap-section">
 <div class="section-header">HITTER ADVANTAGE (1-0, 2-0, 2-1, 3-0, 3-1)</div>
 <div class="heatmap-row">
-<div class="notes-box">
-<strong>Notes:</strong>
-`r if(!is.null(params$notes$hitter_adv) && params$notes$hitter_adv != "") params$notes$hitter_adv else "No notes"`
-</div>
-```{r hitter-adv-heatmaps, fig.height=1.8, fig.width=10, out.width="78%"}
+<div class="notes-box"><strong>Notes:</strong>`r if(!is.null(params$notes$hitter_adv) && params$notes$hitter_adv != "") params$notes$hitter_adv else ""`</div>
+```{r hitter-adv-heatmaps, fig.height=1.6, fig.width=8, out.width="85%"}
 if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
   df <- params$pitch_data |>
-    filter(
-      (balls == 1 & strikes == 0) |
-      (balls == 2 & strikes %in% c(0, 1)) |
-      (balls == 3 & strikes %in% c(0, 1))
-    )
+    filter((balls == 1 & strikes == 0) | (balls == 2 & strikes %in% c(0, 1)) | (balls == 3 & strikes %in% c(0, 1)))
   if (nrow(df) >= 3) {
-    usage <- get_pitch_usage(df)
-    top_pitches <- head(usage, 6)  # Max 6 per row for layout
-    if (nrow(top_pitches) > 0) {
-      plots <- lapply(seq_len(nrow(top_pitches)), function(i) {
-        pt <- top_pitches$pitch_type_display[i]
-        pct <- top_pitches$pct[i]
-        generate_heatmap_pdf(df, pt, paste0(pt, " (", pct, "%)"))
-      })
-      gridExtra::grid.arrange(grobs = plots, nrow = 1)
-    }
-  } else {
-    cat("Insufficient hitter advantage data")
+    canonical_pts <- head(params$arsenal$pitch_type, 4)
+    ncols <- length(canonical_pts)
+    usage <- df |> count(pitch_type_display) |> mutate(pct = round(n / sum(n) * 100, 0))
+    headers <- lapply(canonical_pts, function(pt) {
+      row <- usage[usage$pitch_type_display == pt, ]
+      if (nrow(row) > 0) make_header_grob(pt, row$pct[1]) else make_blank_grob()
+    })
+    plots <- lapply(canonical_pts, function(pt) {
+      row <- usage[usage$pitch_type_display == pt, ]
+      if (nrow(row) > 0) generate_heatmap_pdf(df, pt, "") else make_blank_grob()
+    })
+    gridExtra::grid.arrange(grobs = c(headers, plots), ncol = ncols, nrow = 2,
+      heights = grid::unit(c(0.22, 1.3), "in"))
   }
 }
 ```
 </div>
-</div>
 
-<div class="heatmap-section">
 <div class="section-header">TWO STRIKES (2K)</div>
 <div class="heatmap-row">
-<div class="notes-box">
-<strong>Notes:</strong>
-`r if(!is.null(params$notes$two_k) && params$notes$two_k != "") params$notes$two_k else "No notes"`
-</div>
-```{r 2k-heatmaps, fig.height=1.8, fig.width=10, out.width="78%"}
+<div class="notes-box"><strong>Notes:</strong>`r if(!is.null(params$notes$two_k) && params$notes$two_k != "") params$notes$two_k else ""`</div>
+```{r 2k-heatmaps, fig.height=1.6, fig.width=8, out.width="85%"}
 if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
   df <- params$pitch_data |> filter(strikes == 2)
   if (nrow(df) >= 3) {
-    usage <- get_pitch_usage(df)
-    top_pitches <- head(usage, 6)  # Max 6 per row for layout
-    if (nrow(top_pitches) > 0) {
-      plots <- lapply(seq_len(nrow(top_pitches)), function(i) {
-        pt <- top_pitches$pitch_type_display[i]
-        pct <- top_pitches$pct[i]
-        generate_heatmap_pdf(df, pt, paste0(pt, " (", pct, "%)"))
-      })
-      gridExtra::grid.arrange(grobs = plots, nrow = 1)
-    }
-  } else {
-    cat("Insufficient 2K data")
+    canonical_pts <- head(params$arsenal$pitch_type, 4)
+    ncols <- length(canonical_pts)
+    usage <- df |> count(pitch_type_display) |> mutate(pct = round(n / sum(n) * 100, 0))
+    headers <- lapply(canonical_pts, function(pt) {
+      row <- usage[usage$pitch_type_display == pt, ]
+      if (nrow(row) > 0) make_header_grob(pt, row$pct[1]) else make_blank_grob()
+    })
+    plots <- lapply(canonical_pts, function(pt) {
+      row <- usage[usage$pitch_type_display == pt, ]
+      if (nrow(row) > 0) generate_heatmap_pdf(df, pt, "") else make_blank_grob()
+    })
+    gridExtra::grid.arrange(grobs = c(headers, plots), ncol = ncols, nrow = 2,
+      heights = grid::unit(c(0.22, 1.3), "in"))
   }
 }
 ```
 </div>
-</div>
 
-<div class="heatmap-section">
 <div class="section-header">RISP (RUNNERS IN SCORING POSITION)</div>
 <div class="heatmap-row">
-<div class="notes-box">
-<strong>Notes:</strong>
-Manual heatmaps - no baserunner data available
-</div>
-```{r risp-images, results='asis', echo=FALSE}
-if (!is.null(params$risp_images) && length(params$risp_images) > 0) {
-  cat('<div style="display: flex; gap: 10px; flex-wrap: wrap;">')
-  for (pt in names(params$risp_images)) {
-    url <- params$risp_images[[pt]]
-    if (!is.null(url) && url != "") {
-      cat(sprintf('<div class="heatmap-container" style="text-align: center;"><img src="%s" style="max-width:130px; max-height:140px; border-radius: 4px;"/><div style="font-size: 9px; font-weight: bold; margin-top: 3px;">%s</div></div>', url, pt))
+<div class="notes-box"><strong>Notes:</strong>`r if(!is.null(params$notes$risp) && params$notes$risp != "") params$notes$risp else ""`</div>
+<div style="flex: 1; display: flex; justify-content: flex-start; align-items: flex-start; gap: 8px;">
+```{r risp-section, results='asis', echo=FALSE}
+risp_imgs <- params$risp_images
+if (!is.list(risp_imgs)) risp_imgs <- as.list(risp_imgs)
+
+risp_usages <- params$risp_usages
+if (!is.list(risp_usages)) risp_usages <- as.list(risp_usages)
+
+# Get pitch order from arsenal
+pitch_order <- if (!is.null(params$arsenal)) head(params$arsenal$pitch_type, 6) else names(risp_imgs)
+
+if (length(pitch_order) > 0) {
+  for (pt in pitch_order) {
+    colors <- get_pitch_color(pt)
+
+    # Get usage for this pitch
+    usage_val <- if (pt %in% names(risp_usages)) {
+      paste0(risp_usages[[pt]], "%")
+    } else {
+      ""
     }
+
+    # Get image URL
+    url <- ""
+    if (pt %in% names(risp_imgs)) {
+      url_val <- risp_imgs[[pt]]
+      if (!is.null(url_val) && length(url_val) > 0) url <- as.character(url_val[1])
+    }
+
+    cat('<div style="flex: 1; max-width: 120px; text-align: center;">')
+
+    # Colored header with pitch name and usage
+    if (usage_val != "") {
+      cat(sprintf('<div style="background: %s; color: %s; padding: 2px 4px; border-radius: 3px; font-weight: bold; font-size: 8px; margin-bottom: 2px;">%s (%s)</div>',
+                  colors$bg, colors$text, pt, usage_val))
+    } else {
+      cat(sprintf('<div style="background: %s; color: %s; padding: 2px 4px; border-radius: 3px; font-weight: bold; font-size: 8px; margin-bottom: 2px;">%s</div>',
+                  colors$bg, colors$text, pt))
+    }
+
+    # Image or placeholder
+    if (url != "") {
+      cat(sprintf('<img src="%s" style="width: 100%%; max-height: 70px; object-fit: contain; border: 1px solid #ddd; border-radius: 3px;"/>', url))
+    } else {
+      cat('<div style="height: 50px; background: #f5f5f5; border: 1px dashed #ccc; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 7px; color: #888;">No image</div>')
+    }
+
+    cat('</div>')
   }
-  cat('</div>')
 } else {
-  cat('<div style="color: #888; font-style: italic;">No RISP images uploaded</div>')
+  cat('<div style="color: #888; font-size: 8px; padding: 10px;">No RISP data</div>')
 }
 ```
 </div>
-</div>
-
-```{r pitch-descriptions, results='asis', echo=FALSE}
-if (!is.null(params$pitch_descriptions) && length(params$pitch_descriptions) > 0) {
-  cat('<div class="heatmap-section">')
-  cat('<div class="section-header">PITCH DESCRIPTIONS</div>')
-  cat('<div style="background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px;">')
-  cat('<table style="width: 100%; font-size: 11px;">')
-  for (pt in names(params$pitch_descriptions)) {
-    desc <- params$pitch_descriptions[[pt]]
-    if (!is.null(desc) && desc != "") {
-      cat(sprintf('<tr><td style="font-weight: bold; width: 120px; padding: 3px 8px;">%s:</td><td style="padding: 3px 8px;">%s</td></tr>', pt, desc))
-    }
-  }
-  cat('</table>')
-  cat('</div>')
-  cat('</div>')
-}
-```
-
 </div>
 
 <div class="footer">
-Report generated on `r Sys.Date()` | Cal Poly Baseball Scouting System | Print this page (Ctrl/Cmd + P) to save as PDF
+Report generated `r Sys.Date()` | Cal Poly Baseball | Print (Ctrl/Cmd + P) to save as PDF
 </div>
