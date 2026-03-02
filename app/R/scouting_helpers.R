@@ -403,9 +403,9 @@ get_opposing_teams <- memoise(.get_opposing_teams_raw, cache = scouting_cache, o
     SELECT DISTINCT pitcher
     FROM core_level.trackman_event
     WHERE pitcherteam = $1
-      AND batterteam = 'CAL_MUS'
       AND pitcher IS NOT NULL
       AND pitcher != ''
+      AND EXTRACT(YEAR FROM date) >= 2026
     ORDER BY pitcher
   ", params = list(team))
   result$pitcher

@@ -43,9 +43,9 @@ get_opposing_batters <- function(pool, team_code) {
       SELECT DISTINCT batter
       FROM core_level.trackman_event
       WHERE batterteam = $1
-        AND pitcherteam = 'CAL_MUS'
         AND batter IS NOT NULL
         AND batter != ''
+        AND EXTRACT(YEAR FROM date) >= 2026
       ORDER BY batter
     ", params = list(team_code))$batter
   }, error = function(e) {

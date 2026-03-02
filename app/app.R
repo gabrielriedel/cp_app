@@ -40,7 +40,8 @@ if (!inherits(cp_df$Date, "Date")) {
 }
 
 cp_pitchers <- cp_df |>
-  filter(PitcherTeam == "CAL_MUS")
+  filter(PitcherTeam == "CAL_MUS",
+         Date >= as.Date("2026-01-01"))
 
 cp_hitters <- cp_df |>
   filter(BatterTeam == "CAL_MUS")
@@ -191,7 +192,7 @@ body <- dashboardBody(
             
             box(dateRangeInput("pitcher_game_range",
                                "Select Date Range",
-                               start="2025-10-01",
+                               start="2026-02-12",
                                end = Sys.Date())
             )
             ),
@@ -280,7 +281,7 @@ body <- dashboardBody(
             ),
             box(dateRangeInput("hitter_game_range",
                                "Select Date Range",
-                               start="2025-10-01",
+                               start="2026-02-12",
                                end = Sys.Date())
             )
             ),
@@ -338,7 +339,7 @@ body <- dashboardBody(
           selectInput("opp_team", "Select Team", choices = NULL),
           selectInput("opp_pitcher", "Select Pitcher", choices = NULL),
           dateRangeInput("opp_dates", "Date Range",
-                         start = "2025-02-13", end = Sys.Date()),
+                         start = "2026-02-12", end = Sys.Date()),
           radioButtons("opp_split", "Scouting vs.",
                        choices = c("LHH" = "Left", "RHH" = "Right"),
                        selected = "Right",
@@ -493,7 +494,7 @@ body <- dashboardBody(
                        choices = c("vs RHP" = "Right", "vs LHP" = "Left"),
                        selected = "Right", inline = TRUE),
           dateRangeInput("hitter_opp_dates", "Date Range",
-                         start = "2025-02-13", end = Sys.Date()),
+                         start = "2026-02-12", end = Sys.Date()),
           hr(),
           actionButton("load_hitter_report", "Load Batters",
                        class = "btn-primary btn-lg", style = "width: 100%;"),
