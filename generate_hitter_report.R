@@ -430,14 +430,12 @@ OFF_IMG_BOT    <- 11  # bottom images start here
 OFF_BOT_DATA   <- 16  # FLY/GROUND/2KSLG values
 OFF_END        <- 19  # last row of block
 
-# Style helpers
-dark_blue  <- wb_color("#1a365d")
-white_col  <- wb_color("#ffffff")
-light_gray <- wb_color("#f1f5f9")
-mid_gray   <- wb_color("#cbd5e1")
-bold_font  <- wb_font(bold=TRUE, size=8)
-small_font <- wb_font(size=7)
-hdr_font   <- wb_font(bold=TRUE, size=8, color=white_col)
+# Style helpers (wb_color uses hex WITHOUT #)
+dark_blue  <- wb_color(hex="1a365d")
+white_col  <- wb_color(hex="ffffff")
+light_gray <- wb_color(hex="f1f5f9")
+mid_gray   <- wb_color(hex="cbd5e1")
+hdr_bg     <- wb_color(hex="e2e8f0")
 
 d <- function(r_offset, r_base) r_base + r_offset   # absolute row helper
 
@@ -459,9 +457,9 @@ write_batter_block <- function(wb, sheet, row_base,
                               stats$n_pitches, " pitches"),
                     dims=wb_dims(rows=R(OFF_HEADER), cols=1),
                     col_names=FALSE)
-  wb <- wb_add_cell_style(wb, sheet=sheet,
-                          dims=wb_dims(rows=R(OFF_HEADER), cols=1),
-                          fill=wb_fill(foreground_color=dark_blue))
+  wb <- wb_add_fill(wb, sheet=sheet,
+                    dims=wb_dims(rows=R(OFF_HEADER), cols=1),
+                    color=dark_blue)
   wb <- wb_add_font(wb, sheet=sheet,
                     dims=wb_dims(rows=R(OFF_HEADER), cols=1),
                     bold=TRUE, size=9, color=white_col)
@@ -495,9 +493,9 @@ write_batter_block <- function(wb, sheet, row_base,
                     dims=wb_dims(rows=r_hdr, cols=COL_HR),  col_names=FALSE)
 
   # Style header row
-  wb <- wb_add_cell_style(wb, sheet=sheet,
-                          dims=wb_dims(rows=r_hdr, cols=1:40),
-                          fill=wb_fill(foreground_color=wb_color("#e2e8f0")))
+  wb <- wb_add_fill(wb, sheet=sheet,
+                    dims=wb_dims(rows=r_hdr, cols=1:40),
+                    color=hdr_bg)
   wb <- wb_add_font(wb, sheet=sheet,
                     dims=wb_dims(rows=r_hdr, cols=1:40),
                     bold=TRUE, size=7)
@@ -588,9 +586,9 @@ write_batter_block <- function(wb, sheet, row_base,
                     dims=wb_dims(rows=r_avg_hdr, cols=COL_GROUND), col_names=FALSE)
 
   # Style AVG header
-  wb <- wb_add_cell_style(wb, sheet=sheet,
-                          dims=wb_dims(rows=r_avg_hdr, cols=1:40),
-                          fill=wb_fill(foreground_color=wb_color("#e2e8f0")))
+  wb <- wb_add_fill(wb, sheet=sheet,
+                    dims=wb_dims(rows=r_avg_hdr, cols=1:40),
+                    color=hdr_bg)
   wb <- wb_add_font(wb, sheet=sheet,
                     dims=wb_dims(rows=r_avg_hdr, cols=1:40),
                     bold=TRUE, size=7)
@@ -631,10 +629,10 @@ write_batter_block <- function(wb, sheet, row_base,
     }
   }
 
-  # ── Light border/background on batter block ─────────────────────────────────
-  wb <- wb_add_cell_style(wb, sheet=sheet,
-                          dims=wb_dims(rows=R(OFF_HEADER):R(OFF_END), cols=1:40),
-                          border="bottom", border_color=wb_color("#cbd5e1"))
+  # ── Bottom border on last row of batter block ────────────────────────────────
+  wb <- wb_add_border(wb, sheet=sheet,
+                      dims=wb_dims(rows=R(OFF_END), cols=1:40),
+                      bottom_color=mid_gray, bottom_border="thin")
 
   invisible(wb)
 }
@@ -688,14 +686,16 @@ generate_hitter_report <- function(
   # Create workbook + sheet
   wb     <- wb_workbook(creator="Shilo / Cal Poly Baseball")
   sheet  <- hand_label
-  wb     <- wb_add_sheet(wb, sheet=sheet)
+  wb     <- wb_add_worksheet(wb, sheet=sheet)
 
   # Column widths
   for (i in 1:12) wb <- wb_set_col_widths(wb, sheet=sheet, cols=i, widths=6.0)   # heatmap pairs
   for (i in 13:34) wb <- wb_set_col_widths(wb, sheet=sheet, cols=i, widths=5.0)  # count cols
   for (i in 35:40) wb <- wb_set_col_widths(wb, sheet=sheet, cols=i, widths=7.5)  # stat cols
 
-  # Process each batter
+  # Process each batter — accumulate all temp plot files, clean up after save
+  all_plots <- list()
+
   for (idx in seq_along(batters)) {
     batter <- batters[idx]
     cat(sprintf("[%d/%d] %s\n", idx, length(batters), batter))
@@ -709,6 +709,7 @@ generate_hitter_report <- function(
                 stats$gb_pct, stats$fly_pct))
 
     plots  <- generate_plots(df_b)
+    all_plots[[idx]] <- plots   # keep alive until after wb_save
 
     row_base <- (idx - 1) * ROWS_PER_BATTER + 1
 
@@ -732,15 +733,18 @@ generate_hitter_report <- function(
                              batter_name=batter,
                              hand_label=hand_label,
                              stats=stats, counts=counts, plots=plots)
-    cleanup_plots(plots)
   }
 
+  # Save first, then clean up temp image files
   cat(sprintf("\nSaving %s...\n", output_file))
   wb_save(wb, output_file)
   cat("Done! Open:", normalizePath(output_file, mustWork=FALSE), "\n")
 
+  lapply(all_plots, cleanup_plots)
   invisible(output_file)
 }
+
+
 
 #' Convenience: generate both RHP and LHP reports for a series
 generate_series_reports <- function(team_code, ...) {
