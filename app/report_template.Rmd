@@ -247,6 +247,13 @@ generate_whiff_heatmap_report <- function(df, title = "Swing & Miss") {
     )
 }
 
+# Helper: format decimal feet as feet-and-inches (e.g. 5.5 -> "5' 6\"")
+format_feet_inches <- function(ft) {
+  if (is.na(ft) || !is.finite(ft)) return("N/A")
+  total_inches <- round(ft * 12)
+  sprintf("%d' %d\"", total_inches %/% 12L, total_inches %% 12L)
+}
+
 # Calculate pitcher info — extension and release height use fastballs/sinkers only
 pitcher_info <- if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
   df <- params$pitch_data
@@ -255,8 +262,8 @@ pitcher_info <- if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) 
                           grepl("fastball|sinker", pitch_type_display, ignore.case = TRUE))
   mech_df <- if (nrow(fb_df) >= 3) fb_df else df  # fall back to all pitches if no FB data
   list(
-    extension  = sprintf("%.1f", mean(mech_df$extension,  na.rm = TRUE)),
-    rel_height = sprintf("%.1f", mean(mech_df$relheight,  na.rm = TRUE)),
+    extension  = format_feet_inches(mean(mech_df$extension, na.rm = TRUE)),
+    rel_height = format_feet_inches(mean(mech_df$relheight, na.rm = TRUE)),
     throws     = if (mean(df$relside, na.rm = TRUE) > 0) "RHP" else "LHP"
   )
 } else {

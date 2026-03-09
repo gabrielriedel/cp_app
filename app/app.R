@@ -338,6 +338,10 @@ body <- dashboardBody(
           status = "primary",
           solidHeader = TRUE,
           selectInput("opp_team", "Select Team", choices = NULL),
+          downloadButton("download_team_reports", "Download All Team Reports (HTML)",
+                         class = "btn-warning", style = "width: 100%; margin-bottom: 4px;"),
+          tags$small(class = "text-muted", "RHH + LHH for all pitchers with saved notes"),
+          br(), br(),
           selectInput("opp_pitcher", "Select Pitcher", choices = NULL),
           dateRangeInput("opp_dates", "Date Range",
                          start = "2026-02-12", end = Sys.Date()),
@@ -378,10 +382,10 @@ body <- dashboardBody(
         )
       ),
 
-      # Row 2: Report Preview (hidden until Apply clicked)
+      # Row 2: Report Preview (hidden until Apply clicked; re-hidden when split changes)
       fluidRow(
-        conditionalPanel(
-          condition = "input.apply_remap > 0",
+        shinyjs::hidden(
+          div(id = "step2_preview",
           box(
             width = 12,
             title = "Step 2: Scouting Report Preview",
@@ -477,6 +481,7 @@ body <- dashboardBody(
               column(2),  # Empty to align with notes column
               column(8, uiOutput("risp_usage_inputs"))
             )
+          )
           )
         )
       )
@@ -1144,6 +1149,7 @@ server <- function(input, output, session) {
 
   # Reactive to store processed data for description inputs
   rval_processed_data <- reactiveVal(NULL)
+  rval_saved_pitch_edits <- reactiveVal(list(deletions = character(0), remaps = list()))
 
   # Reactive trigger for refreshing upcoming opponents
   upcoming_trigger <- reactiveVal(0)
@@ -1243,6 +1249,8 @@ server <- function(input, output, session) {
     updateSelectInput(session, "opp_pitcher", choices = pitchers)
     # Reset pitcher image when team changes
     rval_pitcher_image_url(NULL)
+    # Reset saved pitch edits when team changes
+    rval_saved_pitch_edits(list(deletions = character(0), remaps = list()))
     # Reset delete checkboxes when team changes
     shinyjs::runjs("
       $('.delete-check').prop('checked', false);
@@ -1319,6 +1327,10 @@ server <- function(input, output, session) {
     # Load pitch descriptions (with split)
     descriptions <- get_pitch_descriptions(pool, input$opp_pitcher, input$opp_team, input$opp_split)
     rval_pitch_descriptions(descriptions)
+
+    # Load saved pitch deletions/remaps (with split)
+    saved_edits <- get_pitch_edits(pool, input$opp_pitcher, input$opp_team, input$opp_split)
+    rval_saved_pitch_edits(saved_edits)
 
     # Load pitcher stats (shared across splits — IP/ERA/K/BB are pitcher-level, not split-specific)
     stats <- tryCatch({
@@ -1422,6 +1434,7 @@ server <- function(input, output, session) {
   # Pitch validation table with remap dropdowns and delete checkboxes
   output$pitch_validation_table <- DT::renderDT({
     summary_df <- rval_validation_summary()
+    saved_edits <- rval_saved_pitch_edits()
 
     if (nrow(summary_df) == 0) {
       return(datatable(data.frame(Message = "No pitch data found for this pitcher in the selected date range")))
@@ -1429,6 +1442,8 @@ server <- function(input, output, session) {
 
     # Get unique pitch types for dropdown options
     pitch_types <- summary_df$pitch_type
+    saved_deletions <- saved_edits$deletions
+    saved_remaps <- saved_edits$remaps
 
     # Build HTML select options
     build_options <- function(choices, selected) {
@@ -1439,19 +1454,23 @@ server <- function(input, output, session) {
       paste(opts, collapse = "")
     }
 
-    # Add remap dropdown column using plain HTML
+    # Add remap dropdown column using plain HTML (pre-select saved remap if exists)
     summary_df$remap_to <- sapply(seq_len(nrow(summary_df)), function(i) {
+      pt <- summary_df$pitch_type[i]
+      selected_remap <- if (!is.null(saved_remaps[[pt]])) saved_remaps[[pt]] else pt
       sprintf(
         '<select id="remap_%d" class="remap-select" style="width:120px;" onchange="Shiny.setInputValue(\'remap_%d\', this.value, {priority: \'event\'})">%s</select>',
-        i, i, build_options(pitch_types, summary_df$pitch_type[i])
+        i, i, build_options(pitch_types, selected_remap)
       )
     })
 
-    # Add delete checkbox column using plain HTML
+    # Add delete checkbox column using plain HTML (pre-check if pitch was saved as deleted)
     summary_df$delete <- sapply(seq_len(nrow(summary_df)), function(i) {
+      pt <- summary_df$pitch_type[i]
+      checked <- if (pt %in% saved_deletions) 'checked="checked"' else ''
       sprintf(
-        '<input type="checkbox" id="delete_pitch_%d" class="delete-check" onchange="Shiny.setInputValue(\'delete_pitch_%d\', this.checked, {priority: \'event\'})">',
-        i, i
+        '<input type="checkbox" id="delete_pitch_%d" class="delete-check" %s onchange="Shiny.setInputValue(\'delete_pitch_%d\', this.checked, {priority: \'event\'})">',
+        i, checked, i
       )
     })
 
@@ -1465,6 +1484,16 @@ server <- function(input, output, session) {
         ordering = FALSE,
         columnDefs = list(
           list(className = 'dt-center', targets = "_all")
+        ),
+        initComplete = JS(
+          "function(settings, json) {",
+          "  $('.delete-check:checked').each(function() {",
+          "    Shiny.setInputValue(this.id, true, {priority: 'event'});",
+          "  });",
+          "  $('.remap-select').each(function() {",
+          "    Shiny.setInputValue(this.id, this.value, {priority: 'event'});",
+          "  });",
+          "}"
         )
       ),
       colnames = c("Pitch Type", "Count", "Avg IVB", "Avg HB", "Avg Velo", "Remap To", "Delete")
@@ -1509,6 +1538,16 @@ server <- function(input, output, session) {
     # Return only non-NA (deleted) pitch types
     deleted[!is.na(deleted)]
   })
+
+  # Show Step 2 preview when Apply is clicked
+  observeEvent(input$apply_remap, {
+    shinyjs::show("step2_preview")
+  })
+
+  # Hide Step 2 preview when split changes (force re-apply)
+  observeEvent(input$opp_split, {
+    shinyjs::hide("step2_preview")
+  }, ignoreInit = TRUE)
 
   # Main reactive data for scouting report (with deletions and remapping applied)
   rval_scout_data <- eventReactive(input$apply_remap, {
@@ -1567,6 +1606,9 @@ server <- function(input, output, session) {
       if (save_success) {
         showNotification("Notes saved", type = "message", duration = 2)
       }
+
+      # Save pitch deletions and remaps
+      save_pitch_edits(pool, input$opp_pitcher, input$opp_team, deletions, as.list(remap), input$opp_split)
 
       incProgress(0.05, detail = "Done!")
     })
@@ -1700,14 +1742,6 @@ server <- function(input, output, session) {
     avg_ext <- mean(df$extension, na.rm = TRUE)
     avg_rel_height <- mean(df$relheight, na.rm = TRUE)
 
-    # Find out pitch (most common secondary pitch based on usage)
-    arsenal <- data$arsenal
-    if (nrow(arsenal) > 1) {
-      out_pitch <- arsenal$pitch_type[2]
-    } else {
-      out_pitch <- arsenal$pitch_type[1]
-    }
-
     # Get pitcher image URL if available
     img_url <- rval_pitcher_image_url()
 
@@ -1729,16 +1763,15 @@ server <- function(input, output, session) {
           tags$div(
             style = paste0("background:", ext_col$bg, "; color:", ext_col$text,
                            "; border-radius:4px; padding:5px 8px; margin-bottom:4px;"),
-            tags$strong("Extension: "), sprintf("%.1f ft", avg_ext)
+            tags$strong("Extension: "), format_feet_inches(avg_ext)
           ),
           tags$div(
             style = paste0("background:", rel_col$bg, "; color:", rel_col$text,
                            "; border-radius:4px; padding:5px 8px; margin-bottom:4px;"),
-            tags$strong("Release Height: "), sprintf("%.1f ft", avg_rel_height)
+            tags$strong("Release Height: "), format_feet_inches(avg_rel_height)
           )
         )
       },
-      p(strong("Out Pitch: "), out_pitch),
       hr(),
       plotOutput("release_plot_output", height = "250px")
     )
@@ -1756,8 +1789,10 @@ server <- function(input, output, session) {
     df <- rval_scout_filtered()
     req(df, nrow(df) > 0)
 
-    # Recompute arsenal from filtered data so usage reflects current split
-    arsenal <- compute_arsenal_summary(df, "pitch_type_display")
+    # Usage/zone% from split-filtered data; velo/IVB/HB from combined (both splits)
+    data <- rval_scout_data()
+    movement_df <- if (!is.null(data)) data$raw else NULL
+    arsenal <- compute_arsenal_summary(df, "pitch_type_display", movement_df = movement_df)
 
     # Get existing pitch descriptions (ensure it's a proper list)
     descriptions <- rval_pitch_descriptions()
@@ -1824,6 +1859,7 @@ server <- function(input, output, session) {
       arsenal,
       rownames = FALSE,
       escape = FALSE,
+      selection = 'none',
       class = 'cell-border stripe',
       options = list(
         dom = 't',
@@ -2395,7 +2431,16 @@ server <- function(input, output, session) {
   # HTML Report Download handler (print to PDF from browser)
   output$download_report <- downloadHandler(
     filename = function() {
-      paste0("scout_", gsub("[^A-Za-z0-9]", "_", input$opp_pitcher), "_", Sys.Date(), ".html")
+      # Parse "Last, First" → "Last_First"
+      pitcher_raw <- input$opp_pitcher
+      parts <- strsplit(pitcher_raw, ",\\s*")[[1]]
+      if (length(parts) == 2) {
+        pitcher_name <- paste0(trimws(parts[1]), "_", trimws(parts[2]))
+      } else {
+        pitcher_name <- gsub("[^A-Za-z0-9]", "_", pitcher_raw)
+      }
+      split_label <- if (input$opp_split == "Left") "LHH" else "RHH"
+      paste0(pitcher_name, "_", split_label, "_report.html")
     },
     content = function(file) {
       # Create a temporary directory for rendering
@@ -2409,8 +2454,8 @@ server <- function(input, output, session) {
       data <- rval_scout_data()
       df <- rval_scout_filtered()
 
-      # Recompute arsenal from filtered data so usage reflects current split
-      arsenal_filtered <- compute_arsenal_summary(df, "pitch_type_display")
+      # Usage/zone% from split-filtered data; velo/IVB/HB from both splits combined
+      arsenal_filtered <- compute_arsenal_summary(df, "pitch_type_display", movement_df = data$raw)
 
       # Apply any velocity overrides before passing to report
       arsenal_filtered <- apply_velo_overrides(arsenal_filtered, rval_velo_overrides())
@@ -2454,6 +2499,222 @@ server <- function(input, output, session) {
         ),
         envir = new.env(parent = globalenv())
       )
+    }
+  )
+
+  # Batch team report download — one HTML file with all pitchers (RHH + LHH)
+  output$download_team_reports <- downloadHandler(
+    filename = function() {
+      paste0(input$opp_team, "_reports.html")
+    },
+    content = function(file) {
+      req(input$opp_team, input$opp_dates)
+
+      withProgress(message = paste0("Generating ", input$opp_team, " reports..."), value = 0, {
+
+        pitchers <- get_team_pitchers(pool, input$opp_team)
+        if (length(pitchers) == 0) {
+          cat("<html><body><p>No pitchers found for team: ", input$opp_team, "</p></body></html>",
+              file = file)
+          return()
+        }
+
+        temp_dir <- tempdir()
+        temp_rmd <- file.path(temp_dir, "report_template_batch.Rmd")
+        file.copy("report_template.Rmd", temp_rmd, overwrite = TRUE)
+
+        supabase_url <- Sys.getenv("SUPABASE_URL")
+        bucket_name <- "scouting-images"
+
+        html_bodies <- list()
+        shared_head <- NULL
+        n_total <- length(pitchers) * 2
+        done <- 0
+
+        for (pitcher in pitchers) {
+          for (split in c("Right", "Left")) {
+            done <- done + 1
+            split_label <- if (split == "Right") "RHH" else "LHH"
+            incProgress(done / n_total,
+                        detail = paste0(pitcher, " (", split_label, ")"))
+
+            # Fetch notes first — skip pitcher+split with no saved content
+            notes <- tryCatch(
+              get_scouting_notes(pool, pitcher, input$opp_team, split),
+              error = function(e) list(gameplan = "", attack = "", first_pitch = "",
+                                       hitter_adv = "", two_k = "", risp = "",
+                                       pitcher_grade = "", out_pitch = "")
+            )
+            pitch_descs <- tryCatch(
+              get_pitch_descriptions(pool, pitcher, input$opp_team, split),
+              error = function(e) list()
+            )
+
+            has_data <- any(nchar(trimws(c(
+              notes$gameplan %||% "",
+              notes$attack %||% "",
+              notes$first_pitch %||% "",
+              notes$hitter_adv %||% "",
+              notes$two_k %||% ""
+            ))) > 0) || length(pitch_descs) > 0
+
+            if (!has_data) next
+
+            # Fetch and process pitch data
+            raw_df <- tryCatch(
+              get_pitcher_data(pool, pitcher, input$opp_dates[1], input$opp_dates[2]),
+              error = function(e) data.frame()
+            )
+            if (nrow(raw_df) == 0) next
+
+            # Apply saved deletions
+            saved_edits <- tryCatch(
+              get_pitch_edits(pool, pitcher, input$opp_team, split),
+              error = function(e) list(deletions = character(0), remaps = list())
+            )
+            if (length(saved_edits$deletions) > 0) {
+              raw_df <- raw_df |> dplyr::filter(!taggedpitchtype %in% saved_edits$deletions)
+            }
+            if (nrow(raw_df) == 0) next
+
+            # Apply remaps
+            if (length(saved_edits$remaps) > 0) {
+              remap_vec <- unlist(saved_edits$remaps)
+              matched <- raw_df$taggedpitchtype %in% names(remap_vec)
+              raw_df$pitch_type_display <- raw_df$taggedpitchtype
+              raw_df$pitch_type_display[matched] <- remap_vec[raw_df$taggedpitchtype[matched]]
+            } else {
+              raw_df$pitch_type_display <- raw_df$taggedpitchtype
+            }
+
+            # Filter by handedness split
+            df_split <- raw_df |> dplyr::filter(batterside == split)
+            if (nrow(df_split) == 0) next
+
+            # Compute arsenal: usage/zone% from split data, velo/IVB/HB from both splits
+            arsenal_filtered <- compute_arsenal_summary(df_split, "pitch_type_display", movement_df = raw_df)
+
+            # Apply velocity overrides
+            overrides <- tryCatch(
+              get_velo_overrides(pool, pitcher, input$opp_team, split),
+              error = function(e) list()
+            )
+            arsenal_filtered <- apply_velo_overrides(arsenal_filtered, overrides)
+
+            # Fetch remaining scouting data
+            risp_imgs   <- tryCatch(get_risp_images(pool, pitcher, input$opp_team, split), error = function(e) list())
+            risp_usage  <- tryCatch(get_risp_usages(pool, pitcher, input$opp_team, split), error = function(e) list())
+            pitcher_stats <- tryCatch(
+              get_pitcher_stats(pool, pitcher, input$opp_team, "global"),
+              error = function(e) list(ip = "", era = "", k = "", bb = "", baa_lhh = "", baa_rhh = "")
+            )
+
+            # Look up pitcher image URL
+            img_url <- NULL
+            if (supabase_url != "") {
+              safe_team    <- gsub("[^A-Za-z0-9_-]", "_", input$opp_team)
+              safe_pitcher <- gsub("[^A-Za-z0-9_-]", "_", pitcher)
+              for (ext in c("png", "jpg", "jpeg")) {
+                storage_path <- paste0(safe_team, "/", safe_pitcher, ".", ext)
+                pub_url <- paste0(supabase_url, "/storage/v1/object/public/",
+                                   bucket_name, "/", storage_path)
+                resp <- tryCatch(httr::HEAD(pub_url), error = function(e) NULL)
+                if (!is.null(resp) && httr::status_code(resp) == 200) {
+                  img_url <- pub_url
+                  break
+                }
+              }
+            }
+
+            # Render report to temp HTML
+            temp_html <- tempfile(fileext = ".html")
+            tryCatch({
+              rmarkdown::render(
+                temp_rmd,
+                output_file = temp_html,
+                output_format = "html_document",
+                params = list(
+                  pitcher         = pitcher,
+                  team            = input$opp_team,
+                  dates           = input$opp_dates,
+                  split           = split,
+                  arsenal         = arsenal_filtered,
+                  pitch_data      = df_split,
+                  pitcher_image   = img_url,
+                  notes           = list(
+                    gameplan    = notes$gameplan    %||% "",
+                    attack      = notes$attack      %||% "",
+                    first_pitch = notes$first_pitch %||% "",
+                    hitter_adv  = notes$hitter_adv  %||% "",
+                    two_k       = notes$two_k       %||% "",
+                    risp        = notes$risp        %||% ""
+                  ),
+                  pitch_descriptions = pitch_descs,
+                  risp_images        = risp_imgs,
+                  risp_usages        = risp_usage,
+                  pitcher_stats      = pitcher_stats,
+                  grade              = notes$pitcher_grade %||% "",
+                  out_pitch          = notes$out_pitch     %||% ""
+                ),
+                quiet = TRUE,
+                envir = new.env(parent = globalenv())
+              )
+
+              html_content <- paste(readLines(temp_html, encoding = "UTF-8", warn = FALSE),
+                                    collapse = "\n")
+
+              # Capture head section from the first successful render
+              if (is.null(shared_head)) {
+                m <- regmatches(html_content,
+                                regexpr("(?s)<head>.*?</head>", html_content, perl = TRUE))
+                if (length(m) > 0) shared_head <- m
+              }
+
+              # Extract body inner content
+              bm <- regmatches(html_content,
+                               regexpr("(?s)<body[^>]*>.*</body>", html_content, perl = TRUE))
+              if (length(bm) > 0) {
+                body_inner <- bm
+                body_inner <- sub("^<body[^>]*>", "", body_inner, perl = TRUE)
+                body_inner <- sub("</body>\\s*$", "", body_inner, perl = TRUE)
+                html_bodies[[length(html_bodies) + 1]] <- body_inner
+              }
+
+              if (file.exists(temp_html)) file.remove(temp_html)
+
+            }, error = function(e) {
+              message("Batch render failed for ", pitcher, " (", split_label, "): ", e$message)
+            })
+          }
+        }
+
+        if (length(html_bodies) == 0) {
+          cat("<html><body><p>No reports with saved scouting data found for: ",
+              input$opp_team, "</p></body></html>", file = file)
+          return()
+        }
+
+        # Wrap each report section with a page break (except the last)
+        pages <- lapply(seq_along(html_bodies), function(i) {
+          if (i < length(html_bodies)) {
+            paste0('<div style="page-break-after: always;">', html_bodies[[i]], '</div>')
+          } else {
+            paste0('<div>', html_bodies[[i]], '</div>')
+          }
+        })
+
+        full_html <- paste0(
+          "<!DOCTYPE html>\n<html>\n",
+          if (!is.null(shared_head)) shared_head else "<head></head>",
+          "\n<body>\n",
+          paste(pages, collapse = "\n"),
+          "\n</body>\n</html>"
+        )
+
+        con <- file(file, open = "w", encoding = "UTF-8")
+        writeLines(full_html, con = con)
+        close(con)
+      })
     }
   )
 

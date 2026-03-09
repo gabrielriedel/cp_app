@@ -418,12 +418,12 @@ get_opposing_teams <- memoise(.get_opposing_teams_raw, cache = scouting_cache, o
 get_team_pitchers <- memoise(.get_team_pitchers_raw, cache = scouting_cache, omit_args = "pool")
 
 #' Compute arsenal summary from data frame with remapped pitch types
-#' @param df Data frame with pitch data
+#' @param df Data frame with pitch data (used for usage% and zone% — split-specific)
 #' @param pitch_col Column name for pitch type (default: pitch_type_display)
+#' @param movement_df Optional data frame for velo/IVB/HB (both splits combined).
+#'   If NULL, uses df for all stats.
 #' @return Data frame with arsenal summary
-compute_arsenal_summary <- function(df, pitch_col = "pitch_type_display") {
-  # Filter out rows with NA pitch type
-
+compute_arsenal_summary <- function(df, pitch_col = "pitch_type_display", movement_df = NULL) {
   df <- df |> filter(!is.na(.data[[pitch_col]]))
 
   total_pitches <- nrow(df)
@@ -439,25 +439,45 @@ compute_arsenal_summary <- function(df, pitch_col = "pitch_type_display") {
     ))
   }
 
-  df |>
+  # Movement stats (velo, IVB, HB) come from movement_df if provided (both splits),
+  # otherwise fall back to df
+  mov_df <- if (!is.null(movement_df)) {
+    movement_df |> filter(!is.na(.data[[pitch_col]]))
+  } else {
+    df
+  }
+
+  # Split-specific: count, usage%, zone%
+  usage_stats <- df |>
     group_by(.data[[pitch_col]]) |>
     summarize(
-      count = n(),
-      usage = round(n() / total_pitches * 100, 0),
+      count    = n(),
+      usage    = round(n() / total_pitches * 100, 0),
+      zone_pct = round(sum(in_zone, na.rm = TRUE) / n() * 100, 0),
+      .groups  = "drop"
+    ) |>
+    rename(pitch_type = all_of(pitch_col))
+
+  # Combined: velo range, IVB, HB
+  movement_stats <- mov_df |>
+    group_by(.data[[pitch_col]]) |>
+    summarize(
       velo = paste0(
         round(quantile(relspeed, 0.10, na.rm = TRUE), 0), "-",
         round(quantile(relspeed, 0.90, na.rm = TRUE), 0)
       ),
       velo_max = round(max(relspeed, na.rm = TRUE), 0),
-      zone_pct = round(sum(in_zone, na.rm = TRUE) / n() * 100, 0),
       ivb = round(mean(inducedvertbreak, na.rm = TRUE), 1),
-      hb = round(mean(horzbreak, na.rm = TRUE), 1),
+      hb  = round(mean(horzbreak,        na.rm = TRUE), 1),
       .groups = "drop"
     ) |>
-    rename(pitch_type = all_of(pitch_col)) |>
+    rename(pitch_type = all_of(pitch_col))
+
+  usage_stats |>
+    left_join(movement_stats, by = "pitch_type") |>
     mutate(
       is_fb = pitch_type %in% FASTBALL_TYPES | grepl("fastball|sinker", pitch_type, ignore.case = TRUE),
-      velo = if_else(is_fb, paste0(velo, " (", velo_max, ")"), velo)
+      velo  = if_else(is_fb, paste0(velo, " (", velo_max, ")"), velo)
     ) |>
     arrange(desc(is_fb), desc(count)) |>
     select(-is_fb, -velo_max)
@@ -797,6 +817,83 @@ save_pitch_descriptions <- function(pool, pitcher_name, team_name, descriptions,
   })
 }
 
+#' Get pitch deletions and remaps for a pitcher from the database
+#' @param pool Database connection pool
+#' @param pitcher_name Name of the pitcher
+#' @param team_name Name of the team
+#' @param split Batter handedness split ("Both", "Left", "Right")
+#' @return Named list with deletions (character vector) and remaps (named list)
+get_pitch_edits <- function(pool, pitcher_name, team_name, split = "Both") {
+  team_key <- paste0(team_name, "::", split)
+
+  result <- tryCatch({
+    dbGetQuery(pool, "
+      SELECT pitch_deletions, pitch_remaps FROM scouting_notes
+      WHERE pitcher_name = $1 AND team_name = $2
+    ", params = list(pitcher_name, team_key))
+  }, error = function(e) {
+    message("Error fetching pitch edits: ", e$message)
+    return(data.frame())
+  })
+
+  default <- list(deletions = character(0), remaps = list())
+  if (nrow(result) == 0) return(default)
+
+  deletions <- tryCatch({
+    if (is.null(result$pitch_deletions) || is.na(result$pitch_deletions[1])) {
+      character(0)
+    } else {
+      parsed <- jsonlite::fromJSON(result$pitch_deletions[1], simplifyVector = TRUE)
+      if (length(parsed) == 0) character(0) else as.character(parsed)
+    }
+  }, error = function(e) character(0))
+
+  remaps <- tryCatch({
+    if (is.null(result$pitch_remaps) || is.na(result$pitch_remaps[1])) {
+      list()
+    } else {
+      parsed <- jsonlite::fromJSON(result$pitch_remaps[1], simplifyVector = FALSE)
+      if (is.list(parsed)) parsed else list()
+    }
+  }, error = function(e) list())
+
+  list(deletions = deletions, remaps = remaps)
+}
+
+#' Save pitch deletions and remaps for a pitcher to the database
+#' @param pool Database connection pool
+#' @param pitcher_name Name of the pitcher
+#' @param team_name Name of the team
+#' @param deletions Character vector of deleted pitch types
+#' @param remaps Named list of pitch type remaps
+#' @param split Batter handedness split ("Both", "Left", "Right")
+#' @return TRUE on success, FALSE on failure
+save_pitch_edits <- function(pool, pitcher_name, team_name, deletions, remaps, split = "Both") {
+  team_key <- paste0(team_name, "::", split)
+  deletions_json <- jsonlite::toJSON(as.character(deletions), auto_unbox = FALSE)
+  remaps_json <- jsonlite::toJSON(remaps, auto_unbox = TRUE)
+
+  tryCatch({
+    # Ensure row exists
+    dbExecute(pool, "
+      INSERT INTO scouting_notes (pitcher_name, team_name, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (pitcher_name, team_name) DO NOTHING
+    ", params = list(pitcher_name, team_key))
+
+    # Update pitch_deletions and pitch_remaps
+    dbExecute(pool, "
+      UPDATE scouting_notes
+      SET pitch_deletions = $3, pitch_remaps = $4, updated_at = NOW()
+      WHERE pitcher_name = $1 AND team_name = $2
+    ", params = list(pitcher_name, team_key, deletions_json, remaps_json))
+    TRUE
+  }, error = function(e) {
+    message("Error saving pitch edits: ", e$message)
+    FALSE
+  })
+}
+
 #' Get RISP images for a pitcher from the database
 #' @param pool Database connection pool
 #' @param pitcher_name Name of the pitcher
@@ -1064,6 +1161,17 @@ apply_velo_overrides <- function(arsenal, overrides, fastball_types = NULL) {
     }
   }
   arsenal
+}
+
+#' Format a decimal feet value as feet and inches (e.g. 5.5 -> "5' 6\"")
+#' @param ft Numeric value in decimal feet
+#' @return Character string formatted as feet and inches
+format_feet_inches <- function(ft) {
+  if (is.na(ft) || !is.finite(ft)) return("N/A")
+  total_inches <- round(ft * 12)
+  feet   <- total_inches %/% 12L
+  inches <- total_inches %% 12L
+  sprintf("%d' %d\"", feet, inches)
 }
 
 #' Get pitch type color scheme

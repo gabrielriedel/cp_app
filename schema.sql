@@ -151,6 +151,9 @@ CREATE TABLE IF NOT EXISTS scouting_notes (
   pitcher_stats JSONB,  -- {"ip": "45.2", "era": "3.21", "k": "52", "bb": "12", "baa": ".234"}
   pitcher_grade TEXT,
   out_pitch TEXT,
+  velo_overrides JSONB,
+  pitch_deletions JSONB,
+  pitch_remaps JSONB,
   updated_at TIMESTAMP DEFAULT NOW(),
   UNIQUE(pitcher_name, team_name)
 );
@@ -164,6 +167,9 @@ CREATE TABLE IF NOT EXISTS scouting_notes (
 -- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS pitcher_stats JSONB;
 -- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS pitcher_grade TEXT;
 -- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS out_pitch TEXT;
+-- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS velo_overrides JSONB;
+-- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS pitch_deletions JSONB;
+-- ALTER TABLE scouting_notes ADD COLUMN IF NOT EXISTS pitch_remaps JSONB;
 
 -- Create index for fast lookups
 CREATE INDEX IF NOT EXISTS idx_scouting_notes_pitcher
