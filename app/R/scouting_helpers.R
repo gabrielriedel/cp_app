@@ -1003,6 +1003,69 @@ save_pitcher_stats <- function(pool, pitcher_name, team_name, stats, split = "Bo
   })
 }
 
+#' Save velocity overrides per pitch type to database
+save_velo_overrides <- function(pool, pitcher_name, team_name, overrides, split = "Both") {
+  team_key <- paste0(team_name, "::", split)
+  json_str <- jsonlite::toJSON(overrides, auto_unbox = TRUE)
+
+  tryCatch({
+    dbExecute(pool, "
+      INSERT INTO scouting_notes (pitcher_name, team_name, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (pitcher_name, team_name) DO NOTHING
+    ", params = list(pitcher_name, team_key))
+
+    dbExecute(pool, "
+      UPDATE scouting_notes
+      SET velo_overrides = $3, updated_at = NOW()
+      WHERE pitcher_name = $1 AND team_name = $2
+    ", params = list(pitcher_name, team_key, json_str))
+    TRUE
+  }, error = function(e) {
+    message("Error saving velo overrides: ", e$message)
+    FALSE
+  })
+}
+
+#' Get velocity overrides from database
+get_velo_overrides <- function(pool, pitcher_name, team_name, split = "Both") {
+  team_key <- paste0(team_name, "::", split)
+  tryCatch({
+    res <- dbGetQuery(pool, "
+      SELECT velo_overrides FROM scouting_notes
+      WHERE pitcher_name = $1 AND team_name = $2
+    ", params = list(pitcher_name, team_key))
+    if (nrow(res) == 0 || is.na(res$velo_overrides[1])) return(list())
+    jsonlite::fromJSON(res$velo_overrides[1], simplifyVector = FALSE)
+  }, error = function(e) {
+    list()
+  })
+}
+
+#' Apply velocity overrides to an arsenal data frame
+apply_velo_overrides <- function(arsenal, overrides, fastball_types = NULL) {
+  if (is.null(fastball_types)) {
+    fastball_types <- c("Fastball", "Sinker", "Two-Seam", "Four-Seam", "FourSeam", "TwoSeam")
+  }
+  if (length(overrides) == 0) return(arsenal)
+  for (i in seq_len(nrow(arsenal))) {
+    pt <- arsenal$pitch_type[i]
+    if (!is.null(overrides[[pt]])) {
+      ov <- overrides[[pt]]
+      mn  <- ov[["min"]];  mx  <- ov[["max"]];  pk  <- ov[["peak"]]
+      if (!is.null(mn) && !is.null(mx) && !is.na(mn) && !is.na(mx)) {
+        is_fb <- toupper(pt) %in% toupper(fastball_types)
+        range_str <- paste0(mn, "-", mx)
+        if (is_fb && !is.null(pk) && !is.na(pk) && pk != "") {
+          range_str <- paste0(range_str, " (", pk, ")")
+        }
+        arsenal$velo[i] <- range_str
+      }
+    }
+  }
+  arsenal
+}
+
 #' Get pitch type color scheme
 #' @param pitch_type The pitch type name
 #' @return Named list with bg (background) and text colors
@@ -1056,4 +1119,17 @@ get_pitch_color <- function(pitch_type) {
   } else {
     list(bg = "#f3f4f6", text = "#374151")
   }
+}
+
+get_mech_color <- function(val) {
+  if (is.na(val) || is.nan(val) || !is.finite(val)) {
+    return(list(bg = "#e2e8f0", text = "#1a1a1a"))
+  }
+  if      (val >= 6.75)  list(bg = "#39FF14", text = "#1a1a1a")  # neon green
+  else if (val >= 6.5)   list(bg = "#16a34a", text = "#ffffff")   # darker green
+  else if (val >= 6.25)  list(bg = "#bbf7d0", text = "#14532d")   # light soft green
+  else if (val >= 5.833) list(bg = "#e2e8f0", text = "#1a1a1a")   # neutral gray
+  else if (val >= 5.583) list(bg = "#fecaca", text = "#991b1b")   # light pink/red
+  else if (val >= 5.333) list(bg = "#dc2626", text = "#ffffff")   # darker red
+  else                   list(bg = "#ff0000", text = "#ffffff")   # bright red
 }

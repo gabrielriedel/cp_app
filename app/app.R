@@ -1,3 +1,4 @@
+if (file.exists(".Renviron")) readRenviron(".Renviron")
 library(shiny)
 library(shinydashboard)
 library(shinyjs)
@@ -624,7 +625,7 @@ server <- function(input, output, session) {
         PitchCount = n(),
         Usage = PitchCount/nrow(df),
         # Calculate whiff rate from PitchCall
-        Swings = sum(PitchCall %in% c("StrikeSwinging", "FoulBall", "InPlay"), na.rm = TRUE),
+        Swings = sum(PitchCall %in% c("StrikeSwinging", "FoulBall", "FoulBallNotFieldable", "FoulBallFieldable", "InPlay"), na.rm = TRUE),
         Whiffs = sum(PitchCall == "StrikeSwinging", na.rm = TRUE),
         WhiffRate = if_else(Swings > 0, Whiffs / Swings, NA_real_),
         Velo = round(mean(RelSpeed, na.rm = TRUE), 1),
@@ -899,7 +900,11 @@ server <- function(input, output, session) {
       filter(Batter == input$hitter_drop
              & Date >= input$hitter_game_range[1]
              & Date <= input$hitter_game_range[2]) |>
-      mutate(IsKWhiff = if_else((PitchCall == 'StrikeSwinging') & (KorBB == 'Strikeout'), 1, 0),
+      mutate(IsSwing  = if_else(PitchCall %in% c('StrikeSwinging','FoulBall','FoulBallNotFieldable','FoulBallFieldable','InPlay'), 1, 0),
+             IsWhiff  = if_else(PitchCall == 'StrikeSwinging', 1, 0),
+             IsWalk   = if_else(KorBB == 'Walk', 1, 0),
+             IsHBP    = if_else(PitchCall == 'HitByPitch', 1, 0),
+             IsKWhiff = if_else((PitchCall == 'StrikeSwinging') & (KorBB == 'Strikeout'), 1, 0),
              IsKCalled = if_else((PitchCall %in% c('StrikeCalled', 'Strikecalled') & (KorBB == 'Strikeout')), 1, 0),
              LessTwoKFoul = if_else((PitchCall %in% c('FoulBallNotFieldable', 'FoulBallFieldable','FoulBall') & (Strikes < 2)), 1, 0),
              TwoKFoul = if_else((PitchCall %in% c('FoulBallNotFieldable', 'FoulBallFieldable','FoulBall') & (Strikes == 2)), 1, 0),
@@ -1133,6 +1138,9 @@ server <- function(input, output, session) {
 
   # Reactive to store pitch descriptions
   rval_pitch_descriptions <- reactiveVal(list())
+
+  # Reactive to store per-pitch velocity overrides
+  rval_velo_overrides <- reactiveVal(list())
 
   # Reactive to store processed data for description inputs
   rval_processed_data <- reactiveVal(NULL)
@@ -1576,6 +1584,10 @@ server <- function(input, output, session) {
     # Update processed data reactive for description inputs
     rval_processed_data(result)
 
+    # Load saved velocity overrides for this pitcher/team/split
+    overrides <- get_velo_overrides(pool, input$opp_pitcher, input$opp_team, input$opp_split)
+    rval_velo_overrides(overrides)
+
     result
   })
 
@@ -1710,8 +1722,22 @@ server <- function(input, output, session) {
       },
       h4(pitcher_name),
       p(strong("Team: "), team),
-      p(strong("Extension: "), sprintf("%.1f ft", avg_ext)),
-      p(strong("Release Height: "), sprintf("%.1f ft", avg_rel_height)),
+      {
+        ext_col <- get_mech_color(avg_ext)
+        rel_col <- get_mech_color(avg_rel_height)
+        tagList(
+          tags$div(
+            style = paste0("background:", ext_col$bg, "; color:", ext_col$text,
+                           "; border-radius:4px; padding:5px 8px; margin-bottom:4px;"),
+            tags$strong("Extension: "), sprintf("%.1f ft", avg_ext)
+          ),
+          tags$div(
+            style = paste0("background:", rel_col$bg, "; color:", rel_col$text,
+                           "; border-radius:4px; padding:5px 8px; margin-bottom:4px;"),
+            tags$strong("Release Height: "), sprintf("%.1f ft", avg_rel_height)
+          )
+        )
+      },
       p(strong("Out Pitch: "), out_pitch),
       hr(),
       plotOutput("release_plot_output", height = "250px")
@@ -1741,6 +1767,10 @@ server <- function(input, output, session) {
       descriptions <- as.list(descriptions)
     }
 
+    # Apply any saved velocity overrides before display
+    overrides <- rval_velo_overrides()
+    arsenal <- apply_velo_overrides(arsenal, overrides)
+
     # Keep zone_pct numeric for conditional formatting, add display column
     arsenal <- arsenal |>
       mutate(
@@ -1748,11 +1778,23 @@ server <- function(input, output, session) {
         zone_pct_display = paste0(zone_pct, "%")
       )
 
+    # Make velo column clickable — overridden cells shown in blue
+    arsenal$velo_display <- sapply(seq_len(nrow(arsenal)), function(i) {
+      pt  <- arsenal$pitch_type[i]
+      val <- arsenal$velo[i]
+      is_overridden <- !is.null(overrides[[pt]])
+      color <- if (is_overridden) "#1d4ed8" else "#374151"
+      title <- if (is_overridden) "Click to edit (override active)" else "Click to edit velocity"
+      sprintf(
+        '<span style="cursor:pointer; color:%s; font-weight:%s; border-bottom:1px dashed %s;" title="%s" onclick="Shiny.setInputValue(\'velo_edit_row\', %d, {priority:\'event\'})">%s</span>',
+        color, if (is_overridden) "bold" else "normal", color, title, i, htmltools::htmlEscape(val)
+      )
+    })
+
     # Add Notes column with inline text inputs
     desc_names <- names(descriptions)
     arsenal$notes <- sapply(seq_len(nrow(arsenal)), function(i) {
       pt <- arsenal$pitch_type[i]
-      # Safely get description value
       existing <- ""
       if (!is.null(desc_names) && pt %in% desc_names) {
         val <- descriptions[[pt]]
@@ -1765,12 +1807,12 @@ server <- function(input, output, session) {
     })
 
     arsenal <- arsenal |>
-      select(pitch_type, count, usage_display, velo, zone_pct_display, zone_pct, ivb, hb, notes) |>
+      select(pitch_type, count, usage_display, velo_display, zone_pct_display, zone_pct, ivb, hb, notes) |>
       rename(
         `Pitch Type` = pitch_type,
         `#` = count,
         `Usage` = usage_display,
-        `Velo` = velo,
+        `Velo` = velo_display,
         `Zone%` = zone_pct_display,
         `zone_pct_num` = zone_pct,
         `IVB` = ivb,
@@ -1781,7 +1823,7 @@ server <- function(input, output, session) {
     datatable(
       arsenal,
       rownames = FALSE,
-      escape = FALSE,  # Allow HTML in Notes column
+      escape = FALSE,
       class = 'cell-border stripe',
       options = list(
         dom = 't',
@@ -1789,21 +1831,21 @@ server <- function(input, output, session) {
         pageLength = 10,
         columnDefs = list(
           list(className = 'dt-center', targets = 0:7),
-          list(className = 'dt-left', targets = 8),  # Notes column left-aligned
+          list(className = 'dt-left', targets = 8),
           list(visible = FALSE, targets = 5)  # Hide zone_pct_num column (0-indexed)
         ),
         initComplete = JS(
           "function(settings, json) {",
-          "  $(this.api().table().container()).css({'font-size': '16px'});",
-          "  $(this.api().table().header()).css({'font-size': '16px'});",
+          "  $(this.api().table().container()).css({'font-size': '14px'});",
+          "  $(this.api().table().header()).css({'font-size': '14px'});",
           "}"
         )
       )
     ) |>
       formatStyle(
         columns = c('Pitch Type', '#', 'Usage', 'Velo', 'Zone%', 'IVB', 'HB'),
-        fontSize = '16px',
-        lineHeight = '1.6'
+        fontSize = '14px',
+        lineHeight = '1.5'
       ) |>
       formatStyle(
         'Zone%',
@@ -1915,6 +1957,94 @@ server <- function(input, output, session) {
     }
   }, ignoreInit = TRUE)
 
+  # ---- Velocity override modal ----
+
+  # Track which row is being edited and its pitch type
+  rval_velo_edit_row <- reactiveVal(NULL)
+
+  observeEvent(input$velo_edit_row, {
+    i <- input$velo_edit_row
+    data <- rval_processed_data()
+    req(data, i, i >= 1, i <= nrow(data$arsenal))
+
+    pt       <- data$arsenal$pitch_type[i]
+    overrides <- rval_velo_overrides()
+    ov        <- overrides[[pt]]
+
+    # Pre-fill with existing override, or parse auto-calculated velo
+    auto_velo <- data$arsenal$velo[i]  # e.g. "92-95 (96)" or "84-87"
+    parsed <- regmatches(auto_velo, regexpr("^(\\d+)-(\\d+)(?:\\s*\\((\\d+)\\))?", auto_velo, perl = TRUE))
+    parts  <- regmatches(auto_velo, regexec("^(\\d+)-(\\d+)(?:\\s*\\((\\d+)\\))?", auto_velo, perl = TRUE))[[1]]
+
+    default_min  <- if (!is.null(ov$min))  ov$min  else if (length(parts) >= 2) as.integer(parts[2]) else NA
+    default_max  <- if (!is.null(ov$max))  ov$max  else if (length(parts) >= 3) as.integer(parts[3]) else NA
+    default_peak <- if (!is.null(ov$peak)) ov$peak else if (length(parts) >= 4 && parts[4] != "") as.integer(parts[4]) else NA
+
+    rval_velo_edit_row(list(i = i, pt = pt))
+
+    showModal(modalDialog(
+      title = tags$span(
+        style = "font-size:15px; font-weight:bold;",
+        paste0("Edit Velocity — ", pt)
+      ),
+      size = "s",
+      tags$p(
+        style = "font-size:12px; color:#6b7280; margin-bottom:10px;",
+        "Range = 10th-90th percentile. Peak = max (shown in parentheses for fastballs only)."
+      ),
+      fluidRow(
+        column(4, numericInput("velo_edit_min",  "Range Min", value = default_min,  min = 50, max = 110, step = 1)),
+        column(4, numericInput("velo_edit_max",  "Range Max", value = default_max,  min = 50, max = 110, step = 1)),
+        column(4, numericInput("velo_edit_peak", "Peak Max",  value = default_peak, min = 50, max = 110, step = 1))
+      ),
+      footer = tagList(
+        actionButton("velo_save",  "Save",         class = "btn-primary btn-sm"),
+        actionButton("velo_reset", "Reset to Auto", class = "btn-warning btn-sm"),
+        modalButton("Cancel")
+      ),
+      easyClose = TRUE
+    ))
+  })
+
+  observeEvent(input$velo_save, {
+    req(input$velo_edit_min, input$velo_edit_max)
+    ctx <- rval_velo_edit_row()
+    req(ctx)
+
+    overrides       <- rval_velo_overrides()
+    overrides[[ctx$pt]] <- list(
+      min  = as.integer(input$velo_edit_min),
+      max  = as.integer(input$velo_edit_max),
+      peak = if (!is.na(input$velo_edit_peak)) as.integer(input$velo_edit_peak) else NA
+    )
+    rval_velo_overrides(overrides)
+
+    save_velo_overrides(pool, input$opp_pitcher, input$opp_team, overrides, input$opp_split)
+    showNotification(paste0("Velocity override saved for ", ctx$pt), type = "message", duration = 2)
+    removeModal()
+  })
+
+  observeEvent(input$velo_reset, {
+    ctx <- rval_velo_edit_row()
+    req(ctx)
+
+    overrides <- rval_velo_overrides()
+    overrides[[ctx$pt]] <- NULL
+    rval_velo_overrides(overrides)
+
+    save_velo_overrides(pool, input$opp_pitcher, input$opp_team, overrides, input$opp_split)
+    showNotification(paste0("Velocity reset to auto for ", ctx$pt), type = "message", duration = 2)
+    removeModal()
+  })
+
+  # ---- End velocity override modal ----
+
+  # Shared reactive for RISP images — avoids 4x identical DB queries per render cycle
+  rval_risp_images <- reactive({
+    req(input$opp_pitcher, input$opp_team, input$opp_split)
+    get_risp_images(pool, input$opp_pitcher, input$opp_team, input$opp_split)
+  })
+
   # Helper function to create individual RISP slot UI
   create_risp_slot <- function(slot_num) {
     renderUI({
@@ -1928,8 +2058,8 @@ server <- function(input, output, session) {
 
       pt <- arsenal$pitch_type[slot_num]
 
-      # Load existing RISP images
-      risp_images <- get_risp_images(pool, input$opp_pitcher, input$opp_team, input$opp_split)
+      # Load existing RISP images (shared reactive — 1 query per flush, not 4)
+      risp_images <- rval_risp_images()
       if (!is.list(risp_images)) risp_images <- as.list(risp_images)
 
       # Safely extract URL
@@ -2139,9 +2269,9 @@ server <- function(input, output, session) {
 
   # Canonical pitch order from the full split-filtered data — matches the arsenal table
   rval_canonical_order <- reactive({
-    df <- rval_scout_filtered()
-    req(df, nrow(df) > 0)
-    compute_arsenal_summary(df, "pitch_type_display")$pitch_type
+    data <- rval_scout_data()
+    req(data)
+    data$arsenal$pitch_type
   })
 
   # Create a reactive for each heatmap section's data
@@ -2282,6 +2412,9 @@ server <- function(input, output, session) {
       # Recompute arsenal from filtered data so usage reflects current split
       arsenal_filtered <- compute_arsenal_summary(df, "pitch_type_display")
 
+      # Apply any velocity overrides before passing to report
+      arsenal_filtered <- apply_velo_overrides(arsenal_filtered, rval_velo_overrides())
+
       # Get pitcher image URL
       img_url <- rval_pitcher_image_url()
 
@@ -2362,28 +2495,31 @@ server <- function(input, output, session) {
 
       rval_hitter_batters(batters)
 
-      # Load pitch data and notes for each batter
+      # Batch fetch: 1 query for all pitch data
       incProgress(0.2, detail = "Loading pitch data")
-      batter_data <- list()
+      all_pitch_data <- get_team_pitch_data(
+        pool, input$hitter_opp_team,
+        input$hitter_opp_dates[1], input$hitter_opp_dates[2],
+        input$hitter_pitcher_hand
+      )
+      pitch_by_batter <- if (nrow(all_pitch_data) > 0) {
+        split(all_pitch_data, all_pitch_data$batter)
+      } else {
+        list()
+      }
+
+      # Batch fetch: 1 query for all notes
+      incProgress(0.2, detail = "Loading notes")
+      all_notes <- get_team_hitter_notes(pool, input$hitter_opp_team, input$hitter_pitcher_hand)
+
+      # In-memory split (no DB calls in the loop)
+      incProgress(0.4, detail = "Organizing data")
+      batter_data  <- list()
       batter_notes <- list()
-
-      for (i in seq_along(batters)) {
-        batter <- batters[i]
-        incProgress(0.6 / length(batters), detail = paste("Loading", batter))
-
-        # Get pitch data
-        pitch_data <- get_batter_pitch_data(
-          pool, batter,
-          input$hitter_opp_dates[1], input$hitter_opp_dates[2],
-          input$hitter_pitcher_hand
-        )
-        batter_data[[batter]] <- pitch_data
-
-        # Get saved notes
-        notes <- get_hitter_scouting_notes(
-          pool, batter, input$hitter_opp_team, input$hitter_pitcher_hand
-        )
-        batter_notes[[batter]] <- notes
+      for (batter in batters) {
+        batter_data[[batter]]  <- pitch_by_batter[[batter]] %||% data.frame()
+        batter_notes[[batter]] <- all_notes[[batter]] %||%
+          get_hitter_scouting_notes(pool, batter, input$hitter_opp_team, input$hitter_pitcher_hand)
       }
 
       rval_hitter_data(batter_data)

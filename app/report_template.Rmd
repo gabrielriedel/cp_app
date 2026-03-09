@@ -35,15 +35,15 @@ get_pitch_color <- function(pitch_type) {
     "FASTBALL" = list(bg = "#fee2e2", text = "#dc2626"),
     "FB" = list(bg = "#fee2e2", text = "#dc2626"),
     "FOUR-SEAM" = list(bg = "#fee2e2", text = "#dc2626"),
-    "CHANGEUP" = list(bg = "#dcfce7", text = "#16a34a"),
-    "CH" = list(bg = "#dcfce7", text = "#16a34a"),
-    "SLIDER" = list(bg = "#dbeafe", text = "#2563eb"),
-    "SL" = list(bg = "#dbeafe", text = "#2563eb"),
-    "CURVEBALL" = list(bg = "#f3e8ff", text = "#9333ea"),
-    "CB" = list(bg = "#f3e8ff", text = "#9333ea"),
-    "CU" = list(bg = "#f3e8ff", text = "#9333ea"),
-    "CUTTER" = list(bg = "#ffedd5", text = "#ea580c"),
-    "FC" = list(bg = "#ffedd5", text = "#ea580c"),
+    "CHANGEUP" = list(bg = "#dbeafe", text = "#2563eb"),
+    "CH" = list(bg = "#dbeafe", text = "#2563eb"),
+    "SLIDER" = list(bg = "#dcfce7", text = "#16a34a"),
+    "SL" = list(bg = "#dcfce7", text = "#16a34a"),
+    "CURVEBALL" = list(bg = "#ffedd5", text = "#ea580c"),
+    "CB" = list(bg = "#ffedd5", text = "#ea580c"),
+    "CU" = list(bg = "#ffedd5", text = "#ea580c"),
+    "CUTTER" = list(bg = "#f3e8ff", text = "#9333ea"),
+    "FC" = list(bg = "#f3e8ff", text = "#9333ea"),
     "SINKER" = list(bg = "#fef3c7", text = "#d97706"),
     "SI" = list(bg = "#fef3c7", text = "#d97706"),
     "SPLITTER" = list(bg = "#ccfbf1", text = "#0d9488"),
@@ -51,6 +51,19 @@ get_pitch_color <- function(pitch_type) {
     "SWEEPER" = list(bg = "#e0e7ff", text = "#4f46e5")
   )
   if (pt_upper %in% names(colors)) colors[[pt_upper]] else list(bg = "#f3f4f6", text = "#374151")
+}
+
+get_mech_color <- function(val) {
+  if (is.na(val) || is.nan(val) || !is.finite(val)) {
+    return(list(bg = "#e2e8f0", text = "#1a1a1a"))
+  }
+  if      (val >= 6.75)  list(bg = "#39FF14", text = "#1a1a1a")  # neon green
+  else if (val >= 6.5)   list(bg = "#16a34a", text = "#ffffff")   # darker green
+  else if (val >= 6.25)  list(bg = "#bbf7d0", text = "#14532d")   # light soft green
+  else if (val >= 5.833) list(bg = "#e2e8f0", text = "#1a1a1a")   # neutral gray
+  else if (val >= 5.583) list(bg = "#fecaca", text = "#991b1b")   # light pink/red
+  else if (val >= 5.333) list(bg = "#dc2626", text = "#ffffff")   # darker red
+  else                   list(bg = "#ff0000", text = "#ffffff")   # bright red
 }
 
 # Nadaraya-Watson 2D kernel regression
@@ -129,7 +142,7 @@ get_pitch_usage <- function(df) {
 # Colored header grob for a pitch type (matches RISP badge style)
 make_header_grob <- function(pt, pct = NULL) {
   colors <- get_pitch_color(pt)
-  label <- if (!is.null(pct) && !is.na(pct)) paste0(pt, " (", pct, "%)") else pt
+  label <- if (!is.null(pct) && !is.na(pct)) paste0(pt, " (", pct, "%)") else paste0(pt, " (-)")
   grid::grobTree(
     grid::rectGrob(gp = grid::gpar(fill = colors$bg, col = NA)),
     grid::textGrob(label, gp = grid::gpar(col = colors$text, fontface = "bold", fontsize = 9))
@@ -420,9 +433,14 @@ if (!is.null(params$pitcher_image) && params$pitcher_image != "") {
 }
 ```
 
+```{r mech-colors, include=FALSE}
+ext_color    <- get_mech_color(as.numeric(pitcher_info$extension))
+rel_ht_color <- get_mech_color(as.numeric(pitcher_info$rel_height))
+```
+
 <div style="display:flex; gap:3px; margin-bottom:3px;">
-<div class="stat-box" style="flex:1; margin-bottom:0;"><div class="stat-label">EXT</div><div class="stat-value">`r pitcher_info$extension`</div></div>
-<div class="stat-box" style="flex:1; margin-bottom:0;"><div class="stat-label">REL HT</div><div class="stat-value">`r pitcher_info$rel_height`</div></div>
+<div class="stat-box" style="flex:1; margin-bottom:0; background:`r ext_color$bg`; color:`r ext_color$text`;"><div class="stat-label">EXT</div><div class="stat-value">`r pitcher_info$extension`</div></div>
+<div class="stat-box" style="flex:1; margin-bottom:0; background:`r rel_ht_color$bg`; color:`r rel_ht_color$text`;"><div class="stat-label">REL HT</div><div class="stat-value">`r pitcher_info$rel_height`</div></div>
 </div>
 
 ```{r left-grade, results='asis', echo=FALSE}
@@ -556,10 +574,10 @@ if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
 <div class="section-header">OVERALL ATTACK</div>
 <div class="heatmap-row">
 <div class="notes-box"><strong>Notes:</strong>`r if(!is.null(params$notes$attack) && params$notes$attack != "") params$notes$attack else ""`</div>
-```{r overall-heatmaps, fig.height=1.6, fig.width=8, out.width="85%"}
+```{r overall-heatmaps, fig.height=1.6, fig.width=10, out.width="100%"}
 if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
   df <- params$pitch_data
-  canonical_pts <- head(params$arsenal$pitch_type, 4)
+  canonical_pts <- head(params$arsenal$pitch_type, 5)
   ncols <- length(canonical_pts)
   usage <- df |> count(pitch_type_display) |> mutate(pct = round(n / sum(n) * 100, 0))
   headers <- lapply(canonical_pts, function(pt) {
@@ -579,20 +597,19 @@ if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
 <div class="section-header">FIRST PITCH (0-0)</div>
 <div class="heatmap-row">
 <div class="notes-box"><strong>Notes:</strong>`r if(!is.null(params$notes$first_pitch) && params$notes$first_pitch != "") params$notes$first_pitch else ""`</div>
-```{r first-pitch-heatmaps, fig.height=1.6, fig.width=8, out.width="85%"}
+```{r first-pitch-heatmaps, fig.height=1.6, fig.width=10, out.width="100%"}
 if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
   df <- params$pitch_data |> filter(balls == 0 & strikes == 0)
   if (nrow(df) >= 3) {
-    canonical_pts <- head(params$arsenal$pitch_type, 4)
+    canonical_pts <- head(params$arsenal$pitch_type, 5)
     ncols <- length(canonical_pts)
     usage <- df |> count(pitch_type_display) |> mutate(pct = round(n / sum(n) * 100, 0))
     headers <- lapply(canonical_pts, function(pt) {
       row <- usage[usage$pitch_type_display == pt, ]
-      if (nrow(row) > 0) make_header_grob(pt, row$pct[1]) else make_blank_grob()
+      if (nrow(row) > 0) make_header_grob(pt, row$pct[1]) else make_header_grob(pt)
     })
     plots <- lapply(canonical_pts, function(pt) {
-      row <- usage[usage$pitch_type_display == pt, ]
-      if (nrow(row) > 0) generate_heatmap_pdf(df, pt, "") else make_blank_grob()
+      generate_heatmap_pdf(df, pt, "")
     })
     gridExtra::grid.arrange(grobs = c(headers, plots), ncol = ncols, nrow = 2,
       heights = grid::unit(c(0.22, 1.3), "in"))
@@ -604,21 +621,20 @@ if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
 <div class="section-header">HITTER ADVANTAGE (1-0, 2-0, 2-1, 3-0, 3-1)</div>
 <div class="heatmap-row">
 <div class="notes-box"><strong>Notes:</strong>`r if(!is.null(params$notes$hitter_adv) && params$notes$hitter_adv != "") params$notes$hitter_adv else ""`</div>
-```{r hitter-adv-heatmaps, fig.height=1.6, fig.width=8, out.width="85%"}
+```{r hitter-adv-heatmaps, fig.height=1.6, fig.width=10, out.width="100%"}
 if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
   df <- params$pitch_data |>
     filter((balls == 1 & strikes == 0) | (balls == 2 & strikes %in% c(0, 1)) | (balls == 3 & strikes %in% c(0, 1)))
   if (nrow(df) >= 3) {
-    canonical_pts <- head(params$arsenal$pitch_type, 4)
+    canonical_pts <- head(params$arsenal$pitch_type, 5)
     ncols <- length(canonical_pts)
     usage <- df |> count(pitch_type_display) |> mutate(pct = round(n / sum(n) * 100, 0))
     headers <- lapply(canonical_pts, function(pt) {
       row <- usage[usage$pitch_type_display == pt, ]
-      if (nrow(row) > 0) make_header_grob(pt, row$pct[1]) else make_blank_grob()
+      if (nrow(row) > 0) make_header_grob(pt, row$pct[1]) else make_header_grob(pt)
     })
     plots <- lapply(canonical_pts, function(pt) {
-      row <- usage[usage$pitch_type_display == pt, ]
-      if (nrow(row) > 0) generate_heatmap_pdf(df, pt, "") else make_blank_grob()
+      generate_heatmap_pdf(df, pt, "")
     })
     gridExtra::grid.arrange(grobs = c(headers, plots), ncol = ncols, nrow = 2,
       heights = grid::unit(c(0.22, 1.3), "in"))
@@ -630,20 +646,19 @@ if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
 <div class="section-header">TWO STRIKES (2K)</div>
 <div class="heatmap-row">
 <div class="notes-box"><strong>Notes:</strong>`r if(!is.null(params$notes$two_k) && params$notes$two_k != "") params$notes$two_k else ""`</div>
-```{r 2k-heatmaps, fig.height=1.6, fig.width=8, out.width="85%"}
+```{r 2k-heatmaps, fig.height=1.6, fig.width=10, out.width="100%"}
 if (!is.null(params$pitch_data) && nrow(params$pitch_data) > 0) {
   df <- params$pitch_data |> filter(strikes == 2)
   if (nrow(df) >= 3) {
-    canonical_pts <- head(params$arsenal$pitch_type, 4)
+    canonical_pts <- head(params$arsenal$pitch_type, 5)
     ncols <- length(canonical_pts)
     usage <- df |> count(pitch_type_display) |> mutate(pct = round(n / sum(n) * 100, 0))
     headers <- lapply(canonical_pts, function(pt) {
       row <- usage[usage$pitch_type_display == pt, ]
-      if (nrow(row) > 0) make_header_grob(pt, row$pct[1]) else make_blank_grob()
+      if (nrow(row) > 0) make_header_grob(pt, row$pct[1]) else make_header_grob(pt)
     })
     plots <- lapply(canonical_pts, function(pt) {
-      row <- usage[usage$pitch_type_display == pt, ]
-      if (nrow(row) > 0) generate_heatmap_pdf(df, pt, "") else make_blank_grob()
+      generate_heatmap_pdf(df, pt, "")
     })
     gridExtra::grid.arrange(grobs = c(headers, plots), ncol = ncols, nrow = 2,
       heights = grid::unit(c(0.22, 1.3), "in"))

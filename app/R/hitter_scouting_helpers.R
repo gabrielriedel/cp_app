@@ -159,7 +159,7 @@ generate_slg_heatmap_batter <- function(df, pitch_type, title = NULL) {
   # Filter to hits for the pitch type
   plot_data <- df |>
     filter(pitch_type_abbrev == pitch_type & pitchcall == "InPlay") |>
-    filter(playresult %in% c("Single", "SIngle", "Double", "Triple", "triple", "HomeRun", "Homerun")) |>
+    filter(playresult %in% c("Single", "Double", "Triple", "triple", "HomeRun", "Homerun")) |>
     filter(!is.na(platelocside) & !is.na(platelocheight))
 
   if (is.null(title)) {
@@ -394,6 +394,36 @@ generate_2k_take_heatmap <- function(df, title = "2K TAKE") {
     )
 }
 
+# Internal helper — parses one data.frame row from hitter_scouting_notes
+.parse_hitter_note_row <- function(row) {
+  count_data <- tryCatch(
+    jsonlite::fromJSON(row$count_data, simplifyVector = FALSE),
+    error = function(e) list()
+  )
+  highlights <- tryCatch(
+    jsonlite::fromJSON(row$highlights, simplifyVector = FALSE),
+    error = function(e) list()
+  )
+  list(
+    count_data      = count_data,
+    highlights      = highlights,
+    stats_slg       = row$stats_slg   %||% "",
+    stats_run       = row$stats_run   %||% "",
+    stats_k         = row$stats_k     %||% "",
+    stats_bb        = row$stats_bb    %||% "",
+    stats_hbp       = row$stats_hbp   %||% "",
+    stats_hr        = row$stats_hr    %||% "",
+    stats_fly       = row$stats_fly   %||% "",
+    stats_ground    = row$stats_ground %||% "",
+    notes_main      = row$notes_main  %||% "",
+    notes_action    = row$notes_action %||% "",
+    img_box         = row$img_box     %||% "",
+    img_contact     = row$img_contact_point %||% "",
+    img_spray       = row$img_spray_chart %||% "",
+    img_risp_gb     = row$img_risp_gb %||% ""
+  )
+}
+
 #' Get hitter scouting notes for a batter from the database
 #' @param pool Database connection pool
 #' @param batter_name Name of the batter
@@ -439,41 +469,113 @@ get_hitter_scouting_notes <- function(pool, batter_name, team_code, pitcher_hand
     ))
   }
 
-  # Parse JSONB fields
-  count_data <- tryCatch({
-    if (!is.null(result$count_data[1]) && !is.na(result$count_data[1])) {
-      jsonlite::fromJSON(result$count_data[1], simplifyVector = FALSE)
-    } else {
-      list()
-    }
-  }, error = function(e) list())
-
-  highlights <- tryCatch({
-    if (!is.null(result$highlights[1]) && !is.na(result$highlights[1])) {
-      jsonlite::fromJSON(result$highlights[1], simplifyVector = FALSE)
-    } else {
-      list()
-    }
-  }, error = function(e) list())
-
+  parsed <- .parse_hitter_note_row(result[1, ])
+  # Remap internal names back to canonical names used by the rest of the app
   list(
-    count_data = count_data,
-    highlights = highlights,
-    stats_slg = result$stats_slg[1] %||% "",
-    stats_run = result$stats_run[1] %||% "",
-    stats_k = result$stats_k[1] %||% "",
-    stats_bb = result$stats_bb[1] %||% "",
-    stats_hbp = result$stats_hbp[1] %||% "",
-    stats_hr = result$stats_hr[1] %||% "",
-    stats_fly = result$stats_fly[1] %||% "",
-    stats_ground = result$stats_ground[1] %||% "",
-    notes_main = result$notes_main[1] %||% "",
-    notes_action = result$notes_action[1] %||% "",
-    img_box = result$img_box[1] %||% "",
-    img_contact_point = result$img_contact_point[1] %||% "",
-    img_spray_chart = result$img_spray_chart[1] %||% "",
-    img_risp_gb = result$img_risp_gb[1] %||% ""
+    count_data    = parsed$count_data,
+    highlights    = parsed$highlights,
+    stats_slg     = parsed$stats_slg,
+    stats_run     = parsed$stats_run,
+    stats_k       = parsed$stats_k,
+    stats_bb      = parsed$stats_bb,
+    stats_hbp     = parsed$stats_hbp,
+    stats_hr      = parsed$stats_hr,
+    stats_fly     = parsed$stats_fly,
+    stats_ground  = parsed$stats_ground,
+    notes_main    = parsed$notes_main,
+    notes_action  = parsed$notes_action,
+    img_box       = parsed$img_box,
+    img_contact_point = parsed$img_contact,
+    img_spray_chart   = parsed$img_spray,
+    img_risp_gb   = parsed$img_risp_gb
   )
+}
+
+#' Get pitch data for all batters on a team in a single query
+#' @param pool Database connection pool
+#' @param team_code Team code (batterteam)
+#' @param start_date Start date for filtering
+#' @param end_date End date for filtering
+#' @param pitcher_hand Pitcher handedness ("Right" or "Left")
+#' @return Data frame with pitch data for all batters, including pitch_type_abbrev column
+get_team_pitch_data <- function(pool, team_code, start_date, end_date, pitcher_hand) {
+  result <- tryCatch({
+    dbGetQuery(pool, "
+      SELECT
+        batter,
+        taggedpitchtype,
+        platelocside,
+        platelocheight,
+        pitchcall,
+        playresult,
+        exitspeed,
+        angle,
+        balls,
+        strikes,
+        pitcherthrows
+      FROM core_level.trackman_event
+      WHERE batterteam = $1
+        AND date BETWEEN $2 AND $3
+        AND pitcherthrows = $4
+        AND taggedpitchtype IS NOT NULL
+        AND platelocside IS NOT NULL
+        AND platelocheight IS NOT NULL
+    ", params = list(team_code, start_date, end_date, pitcher_hand))
+  }, error = function(e) {
+    message("Error fetching team pitch data: ", e$message)
+    data.frame()
+  })
+  if (nrow(result) > 0) {
+    result$pitch_type_abbrev <- sapply(result$taggedpitchtype, map_pitch_type)
+  }
+  result
+}
+
+#' Get hitter scouting notes for all batters on a team in a single query
+#' @param pool Database connection pool
+#' @param team_code Team code
+#' @param pitcher_hand Pitcher handedness ("Right" or "Left")
+#' @return Named list keyed by batter_name, each value is the parsed notes list
+get_team_hitter_notes <- function(pool, team_code, pitcher_hand) {
+  team_key <- paste0(team_code, "::", pitcher_hand)
+  result <- tryCatch({
+    dbGetQuery(pool, "
+      SELECT batter_name, count_data, highlights,
+             stats_slg, stats_run, stats_k, stats_bb, stats_hbp,
+             stats_hr, stats_fly, stats_ground,
+             notes_main, notes_action,
+             img_box, img_contact_point, img_spray_chart, img_risp_gb
+      FROM hitter_scouting_notes
+      WHERE team_name = $1
+    ", params = list(team_key))
+  }, error = function(e) {
+    message("Error fetching team hitter notes: ", e$message)
+    data.frame()
+  })
+
+  notes_list <- list()
+  for (i in seq_len(nrow(result))) {
+    parsed <- .parse_hitter_note_row(result[i, ])
+    notes_list[[ result$batter_name[i] ]] <- list(
+      count_data        = parsed$count_data,
+      highlights        = parsed$highlights,
+      stats_slg         = parsed$stats_slg,
+      stats_run         = parsed$stats_run,
+      stats_k           = parsed$stats_k,
+      stats_bb          = parsed$stats_bb,
+      stats_hbp         = parsed$stats_hbp,
+      stats_hr          = parsed$stats_hr,
+      stats_fly         = parsed$stats_fly,
+      stats_ground      = parsed$stats_ground,
+      notes_main        = parsed$notes_main,
+      notes_action      = parsed$notes_action,
+      img_box           = parsed$img_box,
+      img_contact_point = parsed$img_contact,
+      img_spray_chart   = parsed$img_spray,
+      img_risp_gb       = parsed$img_risp_gb
+    )
+  }
+  notes_list
 }
 
 #' Save hitter scouting notes for a batter to the database
