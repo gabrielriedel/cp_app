@@ -56,11 +56,30 @@ player_summary <- function(df,
     "Vonderhaar, Coco"  = "VonderHaar, Coco"
   )
   
+  manual_k <- tibble(
+    Batter = c(
+      "Castellon, Nate",
+      "Downing, Jake",
+      "Garza, Alejandro",
+      "Hoiland, Cameron",
+      "Kordic, Dylan",
+      "McLaurin, Xander",
+      "Murray, Casey",
+      "Spiridonoff, Gavin",
+      "Tayman, Ryan",
+      "Thomas, Braxton",
+      "Vachini, Dante"
+    ),
+    K_vs_LHP_manual = c(0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 2),
+    K_vs_RHP_manual = c(0, 4, 1, 1, 1, 0, 4, 2, 4, 0, 0),
+    PA_vs_LHP_manual = c(1, 2, 1, 1, 2, 1, 1, 1, 1, 4, 2),
+    PA_vs_RHP_manual = c(16, 12, 15, 15, 5, 2, 15, 12, 15, 10, 4)
+  )
   df |>
     filter(
       Date >= start_date,
       Date <= end_date,
-      Batter != "Blood, Jason"
+      !Batter %in% c("Blood, Jason", "Matson, Sax")   
     ) |>
     mutate(
       Batter = str_trim(Batter),
@@ -75,72 +94,24 @@ player_summary <- function(df,
         ),
         1L, 0L
       ),
-      
       is_walk = if_else(KorBB == "Walk", 1L, 0L),
       is_hbp  = if_else(PitchCall == "HitByPitch", 1L, 0L),
-      
-      k_miss = if_else(
-        KorBB == "Strikeout" & PitchCall == "StrikeSwinging",
-        1L, 0L
-      ),
-      
-      k_called = if_else(
-        KorBB == "Strikeout" & PitchCall == "StrikeCalled",
-        1L, 0L
-      ),
-      
-      `<2k_foul` = if_else(
-        PitchCall %in% c("FoulBallNotFieldable", "FoulBallFieldable") &
-          Strikes < 2,
-        1L, 0L
-      ),
-      
-      `2k_foul` = if_else(
-        PitchCall %in% c("FoulBallNotFieldable", "FoulBallFieldable") &
-          Strikes == 2,
-        1L, 0L
-      ),
-      
+      k_miss = if_else(KorBB == "Strikeout" & PitchCall == "StrikeSwinging", 1L, 0L),
+      k_called = if_else(KorBB == "Strikeout" & PitchCall == "StrikeCalled", 1L, 0L),
+      `<2k_foul` = if_else(PitchCall %in% c("FoulBallNotFieldable", "FoulBallFieldable") & Strikes < 2, 1L, 0L),
+      `2k_foul`  = if_else(PitchCall %in% c("FoulBallNotFieldable", "FoulBallFieldable") & Strikes == 2, 1L, 0L),
       is_inplay = if_else(PitchCall == "InPlay", 1L, 0L),
-      
       sm = if_else(PitchCall == "StrikeSwinging", 1L, 0L),
-      
-      sm_fb = if_else(
-        PitchCall == "StrikeSwinging" &
-          TaggedPitchType %in% c(
-            "FourSeamFastBall",
-            "Fastball",
-            "TwoSeamFastBall",
-            "Sinker"
-          ),
-        1L, 0L
-      ),
-      
-      sm_sl_cb = if_else(
-        PitchCall == "StrikeSwinging" &
-          TaggedPitchType %in% c(
-            "Slider",
-            "Curveball",
-            "Sweeper"
-          ),
-        1L, 0L
-      ),
-      
-      sm_ch = if_else(
-        PitchCall == "StrikeSwinging" &
-          TaggedPitchType %in% c(
-            "ChangeUp",
-            "Splitter"
-          ),
-        1L, 0L
-      )
+      sm_fb = if_else(PitchCall == "StrikeSwinging" & TaggedPitchType %in% c("FourSeamFastBall","Fastball","TwoSeamFastBall","Sinker"), 1L, 0L),
+      sm_sl_cb = if_else(PitchCall == "StrikeSwinging" & TaggedPitchType %in% c("Slider","Curveball","Sweeper"), 1L, 0L),
+      sm_ch = if_else(PitchCall == "StrikeSwinging" & TaggedPitchType %in% c("ChangeUp","Splitter"), 1L, 0L)
     ) |>
     group_by(Batter) |>
     summarise(
       `Total Swings` = sum(is_swing),
       Walks          = sum(is_walk),
       HBP            = sum(is_hbp),
-      K              = sum(k_miss),
+      K              = sum(KorBB == "Strikeout", na.rm = TRUE),
       `>|`           = sum(k_called),
       `<2K Foul`     = sum(`<2k_foul`),
       `2K Foul`      = sum(`2k_foul`),
@@ -149,13 +120,47 @@ player_summary <- function(df,
       `S&M CB/SL`    = sum(sm_sl_cb),
       `S&M CH`       = sum(sm_ch),
       `S&M Total`    = sum(sm),
+      PA_vs_LHP      = sum(PitchofPA == "1" & PitcherThrows == "Left", na.rm = TRUE),
+      PA_vs_RHP      = sum(PitchofPA == "1" & PitcherThrows == "Right", na.rm = TRUE),
+      K_vs_LHP       = sum(KorBB == "Strikeout" & PitcherThrows == "Left", na.rm = TRUE),
+      K_vs_RHP       = sum(KorBB == "Strikeout" & PitcherThrows == "Right", na.rm = TRUE),
       .groups = "drop"
     ) |>
+    left_join(manual_k, by = "Batter") |>
     mutate(
-      `S&M %` = paste0(
-        round(`S&M Total` / `Total Swings` * 100, 2),
-        "%"
-      )
+      K_vs_LHP = K_vs_LHP + coalesce(K_vs_LHP_manual, 0),
+      K_vs_RHP = K_vs_RHP + coalesce(K_vs_RHP_manual, 0),
+      
+      PA_vs_LHP = PA_vs_LHP + coalesce(PA_vs_LHP_manual, 0),
+      PA_vs_RHP = PA_vs_RHP + coalesce(PA_vs_RHP_manual, 0),
+      
+      # Add manual Ks to total K
+      K = K + coalesce(K_vs_LHP_manual, 0) + coalesce(K_vs_RHP_manual, 0),
+      
+      # Add manual PAs to total PAs if you have a column for total PAs
+      Total_PA = PA_vs_LHP + PA_vs_RHP,  # now includes manual numbers
+      
+      `S&M %` = paste0(round(`S&M Total` / `Total Swings` * 100, 2), "%"),
+      `K% vs LHP` = paste0(K_vs_LHP, "/", PA_vs_LHP, " = ", round(100*K_vs_LHP/pmax(PA_vs_LHP,1),1), "%"),
+      `K% vs RHP` = paste0(K_vs_RHP, "/", PA_vs_RHP, " = ", round(100*K_vs_RHP/pmax(PA_vs_RHP,1),1), "%")
+    ) |>
+    select(
+      Batter,
+      `Total Swings`,
+      Walks,
+      HBP,
+      K,
+      `>|`,
+      `<2K Foul`,
+      `2K Foul`,
+      `In Play`,
+      `S&M FB`,
+      `S&M CB/SL`,
+      `S&M CH`,
+      `S&M Total`,
+      `S&M %`,
+      `K% vs LHP`,
+      `K% vs RHP`
     )
 }
 
