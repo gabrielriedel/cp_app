@@ -397,7 +397,11 @@ body <- dashboardBody(
             # Arsenal Summary
             fluidRow(
               column(3, uiOutput("pitcher_info_box")),
-              column(5, DT::DTOutput("arsenal_table")),
+              column(5,
+                DT::DTOutput("arsenal_table"),
+                actionButton("save_pitch_descriptions", "Save Descriptions",
+                             class = "btn-sm btn-primary", style = "margin-top: 6px;")
+              ),
               column(4,
                 plotOutput("slg_heatmap", height = "180px"),
                 plotOutput("whiff_heatmap", height = "180px"),
@@ -743,11 +747,11 @@ server <- function(input, output, session) {
       annotate("segment", x = -0.85, xend = 0.85,  y = 3.5, yend = 3.5, color = "black", linewidth = 1.2) +
       annotate("segment", x = -0.85, xend = -0.85, y = 1.6, yend = 3.5, color = "black", linewidth = 1.2) +
       annotate("segment", x = 0.85,  xend = 0.85,  y = 1.6, yend = 3.5, color = "black", linewidth = 1.2) +
-      annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black") +
-      annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black") +
-      annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black") +
-      annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-      annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
+      annotate("segment", x = -0.85, xend = 0.85, y = -0.3, yend = -0.3, color = "black") +
+      annotate("segment", x = -0.85, xend = -0.85, y = -0.3, yend = -0.15, color = "black") +
+      annotate("segment", x = 0.85, xend = 0.85, y = -0.3, yend = -0.15, color = "black") +
+      annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = 0, color = "black") +
+      annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = 0, color = "black") +
       theme_minimal()
   })
   
@@ -979,11 +983,11 @@ server <- function(input, output, session) {
       annotate("segment", x = -0.85, xend = 0.85,  y = 3.5, yend = 3.5, color = "black", linewidth = 1.2) +
       annotate("segment", x = -0.85, xend = -0.85, y = 1.6, yend = 3.5, color = "black", linewidth = 1.2) +
       annotate("segment", x = 0.85,  xend = 0.85,  y = 1.6, yend = 3.5, color = "black", linewidth = 1.2) +
-      annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black") +
-      annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black") +
-      annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black") +
-      annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-      annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
+      annotate("segment", x = -0.85, xend = 0.85, y = -0.3, yend = -0.3, color = "black") +
+      annotate("segment", x = -0.85, xend = -0.85, y = -0.3, yend = -0.15, color = "black") +
+      annotate("segment", x = 0.85, xend = 0.85, y = -0.3, yend = -0.15, color = "black") +
+      annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = 0, color = "black") +
+      annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = 0, color = "black") +
       theme_minimal()
   })
   
@@ -1549,6 +1553,10 @@ server <- function(input, output, session) {
     shinyjs::hide("step2_preview")
   }, ignoreInit = TRUE)
 
+  observeEvent(input$opp_pitcher, {
+    shinyjs::hide("step2_preview")
+  }, ignoreInit = TRUE)
+
   # Main reactive data for scouting report (with deletions and remapping applied)
   rval_scout_data <- eventReactive(input$apply_remap, {
     req(input$opp_pitcher, input$opp_dates)
@@ -1738,9 +1746,15 @@ server <- function(input, output, session) {
     pitcher_name <- data$pitcher
     team <- data$team
 
-    # Calculate average extension and release height
-    avg_ext <- mean(df$extension, na.rm = TRUE)
-    avg_rel_height <- mean(df$relheight, na.rm = TRUE)
+    # Calculate average extension and release height (fastballs only)
+    fb_types <- c("Fastball", "FourSeamFastBall", "TwoSeamFastBall", "OneSeamFastBall", "Sinker")
+    fb_df    <- df |> dplyr::filter(
+      pitch_type_display %in% fb_types |
+      grepl("fastball|sinker", pitch_type_display, ignore.case = TRUE)
+    )
+    mech_df        <- if (nrow(fb_df) >= 3) fb_df else df
+    avg_ext        <- mean(mech_df$extension, na.rm = TRUE)
+    avg_rel_height <- mean(mech_df$relheight, na.rm = TRUE)
 
     # Get pitcher image URL if available
     img_url <- rval_pitcher_image_url()
@@ -1874,6 +1888,11 @@ server <- function(input, output, session) {
           "function(settings, json) {",
           "  $(this.api().table().container()).css({'font-size': '14px'});",
           "  $(this.api().table().header()).css({'font-size': '14px'});",
+          "  // Sync pitch description input values to Shiny server after table renders.",
+          "  // This prevents stale values from the previous split being saved under the new split's key.",
+          "  $(this.api().table().container()).find('.pitch-desc-input').each(function() {",
+          "    Shiny.setInputValue(this.id, this.value, {priority: 'event'});",
+          "  });",
           "}"
         )
       )
@@ -1932,66 +1951,23 @@ server <- function(input, output, session) {
   # Pitch description inputs are now inline in the arsenal table
   # The inputs use IDs pitch_desc_1, pitch_desc_2, etc.
 
-  # Track last saved descriptions to avoid duplicate saves
-  rval_last_desc_save <- reactiveVal(NULL)
-
-  # Reactive to collect all pitch descriptions
-  all_pitch_descriptions <- reactive({
+  # Manual save observer for pitch descriptions
+  observeEvent(input$save_pitch_descriptions, {
     data <- rval_processed_data()
-    if (is.null(data) || is.null(data$arsenal)) return(NULL)
+    req(data, data$arsenal, input$opp_pitcher, input$opp_team, input$opp_split)
 
     descriptions <- list()
     for (i in seq_len(nrow(data$arsenal))) {
       pt <- data$arsenal$pitch_type[i]
       val <- input[[paste0("pitch_desc_", i)]]
-      if (!is.null(val)) {
-        descriptions[[pt]] <- val
-      }
+      if (!is.null(val) && nzchar(val)) descriptions[[pt]] <- val
     }
 
-    list(
-      descriptions = descriptions,
-      pitcher = input$opp_pitcher,
-      team = input$opp_team,
-      split = input$opp_split
-    )
-  }) |> debounce(2000)
-
-  # Observer that triggers on debounced description changes
-  observeEvent(all_pitch_descriptions(), {
-    desc_data <- all_pitch_descriptions()
-    req(desc_data, desc_data$pitcher, desc_data$team, desc_data$split)
-
-    # Filter to non-empty descriptions
-    descriptions <- desc_data$descriptions
-    if (is.list(descriptions) && length(descriptions) > 0) {
-      # Filter to non-empty values
-      keep_idx <- sapply(descriptions, function(x) !is.null(x) && length(x) > 0 && x != "")
-      if (is.logical(keep_idx)) {
-        descriptions <- descriptions[keep_idx]
-      }
-    } else if (!is.list(descriptions)) {
-      descriptions <- list()
-    }
-
-    # Create unique key for this save (including split)
-    desc_str <- if (length(descriptions) > 0) {
-      paste(names(descriptions), unlist(descriptions), collapse = "|")
-    } else {
-      ""
-    }
-    save_key <- paste(desc_data$pitcher, desc_data$team, desc_data$split, desc_str, sep = "||")
-
-    # Only save if content has changed since last save
-    if (is.null(rval_last_desc_save()) || rval_last_desc_save() != save_key) {
-      if (length(descriptions) > 0) {
-        save_pitch_descriptions(pool, desc_data$pitcher, desc_data$team, descriptions, desc_data$split)
-        rval_pitch_descriptions(descriptions)
-        rval_last_desc_save(save_key)
-        showNotification("Pitch descriptions auto-saved", type = "message", duration = 1)
-      }
-    }
-  }, ignoreInit = TRUE)
+    save_pitch_descriptions(pool, input$opp_pitcher, input$opp_team,
+                            descriptions, input$opp_split)
+    rval_pitch_descriptions(descriptions)
+    showNotification("Pitch descriptions saved!", type = "message", duration = 2)
+  })
 
   # ---- Velocity override modal ----
 
@@ -2075,8 +2051,12 @@ server <- function(input, output, session) {
 
   # ---- End velocity override modal ----
 
+  # Trigger to force rval_risp_images to re-run after a successful upload
+  rval_risp_refresh <- reactiveVal(0)
+
   # Shared reactive for RISP images — avoids 4x identical DB queries per render cycle
   rval_risp_images <- reactive({
+    rval_risp_refresh()  # take dependency so upload can force a refresh
     req(input$opp_pitcher, input$opp_team, input$opp_split)
     get_risp_images(pool, input$opp_pitcher, input$opp_team, input$opp_split)
   })
@@ -2152,7 +2132,9 @@ server <- function(input, output, session) {
       tags$strong(style = "margin-right: 10px; line-height: 32px;", "RISP Usage %:"),
       lapply(seq_along(pitch_types), function(i) {
         pt <- pitch_types[i]
-        existing_val <- if (pt %in% names(risp_usages)) as.numeric(risp_usages[[pt]]) else NA
+        raw_val <- if (pt %in% names(risp_usages)) risp_usages[[pt]] else NULL
+        existing_val <- suppressWarnings(as.numeric(raw_val))
+        existing_val <- if (length(existing_val) == 1 && !is.na(existing_val)) existing_val else NA
         colors <- get_pitch_color(pt)
 
         tags$div(
@@ -2192,9 +2174,9 @@ server <- function(input, output, session) {
     usages <- list()
     for (i in seq_along(pitch_types)) {
       pt <- pitch_types[i]
-      val <- input[[paste0("risp_usage_", i)]]
-      if (!is.null(val) && val != "") {
-        usages[[pt]] <- as.numeric(val)
+      val <- suppressWarnings(as.numeric(input[[paste0("risp_usage_", i)]]))
+      if (length(val) == 1 && !is.na(val) && is.finite(val)) {
+        usages[[pt]] <- val
       }
     }
 
@@ -2206,47 +2188,48 @@ server <- function(input, output, session) {
     }
   })
 
-  # Handle RISP image uploads
-  observe({
-    data <- rval_processed_data()
-    if (is.null(data) || is.null(data$arsenal)) return()
+  # Handle RISP image uploads — observers created once after first pitcher load
+  # (must be created after fileInputs exist to establish reactive dependency on input)
+  observeEvent(rval_processed_data(), {
+    if (!isTRUE(session$userData$.risp_obs_created)) {
+      session$userData$.risp_obs_created <- TRUE
 
-    for (i in seq_len(nrow(data$arsenal))) {
-      local({
-        idx <- i
-        pt <- data$arsenal$pitch_type[idx]
+      for (idx in 1:4) {
+        local({
+          i <- idx
+          observeEvent(input[[paste0("risp_upload_", i)]], {
+            file <- input[[paste0("risp_upload_", i)]]
+            if (is.null(file)) return()
 
-        observeEvent(input[[paste0("risp_upload_", idx)]], {
-          file <- input[[paste0("risp_upload_", idx)]]
-          if (!is.null(file)) {
-            # Upload to Supabase storage
+            data <- rval_processed_data()
+            if (is.null(data) || is.null(data$arsenal) || i > nrow(data$arsenal)) return()
+            pt <- data$arsenal$pitch_type[i]
+
             supabase_url <- Sys.getenv("SUPABASE_URL")
             supabase_key <- Sys.getenv("SUPABASE_ANON_KEY")
-            bucket_name <- "risp-heatmaps"
+            bucket_name  <- "risp-heatmaps"
 
             if (supabase_url == "" || supabase_key == "") {
               showNotification("Supabase credentials not configured.", type = "error")
               return()
             }
 
-            # Include split in storage path for distinct images per handedness
-            file_ext <- tools::file_ext(file$name)
-            safe_team <- gsub("[^A-Za-z0-9_-]", "_", input$opp_team)
+            file_ext     <- tools::file_ext(file$name)
+            safe_team    <- gsub("[^A-Za-z0-9_-]", "_", input$opp_team)
             safe_pitcher <- gsub("[^A-Za-z0-9_-]", "_", input$opp_pitcher)
-            safe_split <- gsub("[^A-Za-z0-9_-]", "_", input$opp_split)
-            safe_pitch <- gsub("[^A-Za-z0-9_-]", "_", pt)
+            safe_split   <- gsub("[^A-Za-z0-9_-]", "_", input$opp_split)
+            safe_pitch   <- gsub("[^A-Za-z0-9_-]", "_", pt)
             storage_path <- paste0(safe_team, "/", safe_pitcher, "/", safe_split, "/", safe_pitch, ".", file_ext)
-
-            upload_url <- paste0(supabase_url, "/storage/v1/object/", bucket_name, "/", storage_path)
+            upload_url   <- paste0(supabase_url, "/storage/v1/object/", bucket_name, "/", storage_path)
 
             withProgress(message = paste0("Uploading ", pt, " RISP image..."), value = 0.5, {
               response <- tryCatch({
                 httr::PUT(
                   upload_url,
                   httr::add_headers(
-                    Authorization = paste("Bearer", supabase_key),
-                    `Content-Type` = file$type,
-                    `x-upsert` = "true"
+                    Authorization  = paste("Bearer", supabase_key),
+                    `Content-Type` = if (nzchar(file$type)) file$type else "application/octet-stream",
+                    `x-upsert`     = "true"
                   ),
                   body = httr::upload_file(file$datapath)
                 )
@@ -2256,25 +2239,23 @@ server <- function(input, output, session) {
               })
 
               if (!is.null(response) && httr::status_code(response) %in% c(200, 201)) {
-                public_url <- paste0(supabase_url, "/storage/v1/object/public/", bucket_name, "/", storage_path)
-
-                # Save URL to database (with split)
+                public_url  <- paste0(supabase_url, "/storage/v1/object/public/", bucket_name, "/", storage_path)
                 risp_images <- get_risp_images(pool, input$opp_pitcher, input$opp_team, input$opp_split)
                 if (!is.list(risp_images)) risp_images <- as.list(risp_images)
                 risp_images[[pt]] <- public_url
                 save_risp_images(pool, input$opp_pitcher, input$opp_team, risp_images, input$opp_split)
-
+                rval_risp_refresh(isolate(rval_risp_refresh()) + 1)
                 showNotification(paste(pt, "RISP image uploaded!"), type = "message")
               } else if (!is.null(response)) {
                 error_content <- httr::content(response, as = "text", encoding = "UTF-8")
                 showNotification(paste("Upload failed:", error_content), type = "error")
               }
             })
-          }
-        }, ignoreInit = TRUE)
-      })
+          }, ignoreNULL = TRUE)
+        })
+      }
     }
-  })
+  }, once = TRUE)
 
   # Helper to filter data by count
   filter_by_count <- function(df, count_filter) {
@@ -2481,6 +2462,7 @@ server <- function(input, output, session) {
           split = input$opp_split,
           arsenal = arsenal_filtered,
           pitch_data = df,
+          raw_data   = data$raw,
           pitcher_image = img_url,
           notes = list(
             gameplan = input$notes_gameplan,
@@ -2640,6 +2622,7 @@ server <- function(input, output, session) {
                   split           = split,
                   arsenal         = arsenal_filtered,
                   pitch_data      = df_split,
+                  raw_data        = raw_df,
                   pitcher_image   = img_url,
                   notes           = list(
                     gameplan    = notes$gameplan    %||% "",

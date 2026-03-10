@@ -230,12 +230,19 @@ generate_heatmap <- function(df, pitch_type = NULL, title = "", show_legend = FA
     filter(!is.na(platelocside), !is.na(platelocheight))
 
   if (nrow(plot_data) < 3) {
-    # Return empty plot if insufficient data
     return(
       ggplot() +
-        annotate("text", x = 0, y = 2.5, label = "N/A", size = 4) +
+        annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5,
+                 fill = NA, color = "black", linewidth = 1) +
+        annotate("segment", x = -0.85, xend = 0.85,  y = -0.3,  yend = -0.3,  color = "black") +
+        annotate("segment", x = -0.85, xend = -0.85, y = -0.3,  yend = -0.15, color = "black") +
+        annotate("segment", x = 0.85,  xend = 0.85,  y = -0.3,  yend = -0.15, color = "black") +
+        annotate("segment", x = -0.85, xend = 0,     y = -0.15, yend = 0,     color = "black") +
+        annotate("segment", x = 0.85,  xend = 0,     y = -0.15, yend = 0,     color = "black") +
+        coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
+        labs(title = title) +
         theme_void() +
-        labs(title = title)
+        theme(plot.title = element_text(hjust = 0.5, size = 10, face = "bold"))
     )
   }
 
@@ -255,11 +262,11 @@ generate_heatmap <- function(df, pitch_type = NULL, title = "", show_legend = FA
     annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5,
              fill = NA, color = "black", linewidth = 1) +
     # Home plate
-    annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black") +
-    annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
+    annotate("segment", x = -0.85, xend = 0.85, y = -0.3, yend = -0.3, color = "black") +
+    annotate("segment", x = -0.85, xend = -0.85, y = -0.3, yend = -0.15, color = "black") +
+    annotate("segment", x = 0.85, xend = 0.85, y = -0.3, yend = -0.15, color = "black") +
+    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = 0, color = "black") +
+    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = 0, color = "black") +
     coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
     labs(title = title) +
     theme_void() +
@@ -660,17 +667,7 @@ generate_slg_heatmap <- function(df, title = "Damage") {
   valid_df <- df |>
     filter(!is.na(platelocside), !is.na(platelocheight))
 
-  if (nrow(valid_df) < 5) {
-    return(
-      ggplot() +
-        annotate("text", x = 0, y = 2.5, label = "N/A", size = 4) +
-        theme_void() +
-        labs(title = title)
-    )
-  }
-
-  # Assign SLG weights: HR=4, 3B=3, 2B=2, 1B=1, else=0
-  slg_weights <- dplyr::case_when(
+  valid_df$slg_val <- dplyr::case_when(
     valid_df$playresult %in% c("HomeRun", "Homerun") ~ 4,
     valid_df$playresult %in% c("Triple", "triple") ~ 3,
     valid_df$playresult == "Double" ~ 2,
@@ -678,27 +675,38 @@ generate_slg_heatmap <- function(df, title = "Damage") {
     TRUE ~ 0
   )
 
-  grid_df <- nadaraya_watson_2d(valid_df$platelocside, valid_df$platelocheight, slg_weights, bw = 0.30, n = 80)
+  slg_zone_layer <- list(
+    annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5,
+             fill = NA, color = "black", linewidth = 1),
+    annotate("segment", x = -0.85, xend = 0.85, y = -0.3, yend = -0.3, color = "black"),
+    annotate("segment", x = -0.85, xend = -0.85, y = -0.3, yend = -0.15, color = "black"),
+    annotate("segment", x = 0.85, xend = 0.85, y = -0.3, yend = -0.15, color = "black"),
+    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = 0, color = "black"),
+    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = 0, color = "black"),
+    coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE),
+    labs(title = title),
+    theme_void(),
+    theme(plot.title = element_text(hjust = 0.5, size = 10, face = "bold"))
+  )
+
+  # White fallback: too few pitches or no SLG signal
+  if (nrow(valid_df) < 5 || sum(valid_df$slg_val) == 0) {
+    return(ggplot() + slg_zone_layer)
+  }
+
+  grid_df <- nadaraya_watson_2d(valid_df$platelocside, valid_df$platelocheight,
+                                valid_df$slg_val, bw = 0.30, n = 80)
 
   cols <- viridisLite::turbo(256)
   cols[1] <- "white"
 
   ggplot() +
     geom_raster(data = grid_df, aes(x = gx, y = gy, fill = value)) +
-    scale_fill_gradientn(colors = cols, na.value = "white", guide = "none") +
+    scale_fill_gradientn(colors = cols, limits = c(0, 0.9), oob = scales::squish,
+                         na.value = "white", guide = "none") +
     geom_point(data = valid_df, aes(x = platelocside, y = platelocheight),
                color = "white", size = 0.25, alpha = 0.35, inherit.aes = FALSE) +
-    annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5,
-             fill = NA, color = "black", linewidth = 1) +
-    annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black") +
-    annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-    coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
-    labs(title = title) +
-    theme_void() +
-    theme(plot.title = element_text(hjust = 0.5, size = 10, face = "bold"))
+    slg_zone_layer
 }
 
 #' Generate Whiff Heatmap - TruMedia-style Nadaraya-Watson whiff rate map
@@ -709,39 +717,40 @@ generate_whiff_heatmap <- function(df, title = "Swing & Miss") {
   valid_df <- df |>
     filter(!is.na(platelocside), !is.na(platelocheight))
 
-  if (nrow(valid_df) < 5) {
-    return(
-      ggplot() +
-        annotate("text", x = 0, y = 2.5, label = "N/A", size = 4) +
-        theme_void() +
-        labs(title = title)
-    )
+  valid_df$whiff_val <- as.numeric(valid_df$pitchcall == "StrikeSwinging")
+
+  whiff_zone_layer <- list(
+    annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5,
+             fill = NA, color = "black", linewidth = 1),
+    annotate("segment", x = -0.85, xend = 0.85, y = -0.3, yend = -0.3, color = "black"),
+    annotate("segment", x = -0.85, xend = -0.85, y = -0.3, yend = -0.15, color = "black"),
+    annotate("segment", x = 0.85, xend = 0.85, y = -0.3, yend = -0.15, color = "black"),
+    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = 0, color = "black"),
+    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = 0, color = "black"),
+    coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE),
+    labs(title = title),
+    theme_void(),
+    theme(plot.title = element_text(hjust = 0.5, size = 10, face = "bold"))
+  )
+
+  # White fallback: too few pitches or no whiffs recorded
+  if (nrow(valid_df) < 5 || sum(valid_df$whiff_val) == 0) {
+    return(ggplot() + whiff_zone_layer)
   }
 
-  # Assign whiff indicator: 1 if StrikeSwinging, else 0
-  is_whiff <- as.numeric(valid_df$pitchcall == "StrikeSwinging")
-
-  grid_df <- nadaraya_watson_2d(valid_df$platelocside, valid_df$platelocheight, is_whiff, bw = 0.30, n = 80)
+  grid_df <- nadaraya_watson_2d(valid_df$platelocside, valid_df$platelocheight,
+                                valid_df$whiff_val, bw = 0.30, n = 80)
 
   cols <- viridisLite::turbo(256)
   cols[1] <- "white"
 
   ggplot() +
     geom_raster(data = grid_df, aes(x = gx, y = gy, fill = value)) +
-    scale_fill_gradientn(colors = cols, na.value = "white", guide = "none") +
+    scale_fill_gradientn(colors = cols, limits = c(0, 1), oob = scales::squish,
+                         na.value = "white", guide = "none") +
     geom_point(data = valid_df, aes(x = platelocside, y = platelocheight),
                color = "white", size = 0.25, alpha = 0.35, inherit.aes = FALSE) +
-    annotate("rect", xmin = -0.83, xmax = 0.83, ymin = 1.5, ymax = 3.5,
-             fill = NA, color = "black", linewidth = 1) +
-    annotate("segment", x = -0.85, xend = 0.85, y = 0, yend = 0, color = "black") +
-    annotate("segment", x = -0.85, xend = -0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = 0.85, xend = 0.85, y = 0, yend = -0.15, color = "black") +
-    annotate("segment", x = -0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-    annotate("segment", x = 0.85, xend = 0, y = -0.15, yend = -0.3, color = "black") +
-    coord_fixed(xlim = c(-2, 2), ylim = c(-0.5, 4.5), expand = FALSE) +
-    labs(title = title) +
-    theme_void() +
-    theme(plot.title = element_text(hjust = 0.5, size = 10, face = "bold"))
+    whiff_zone_layer
 }
 
 #' Get pitch descriptions for a pitcher from the database
