@@ -1250,3 +1250,99 @@ get_mech_color <- function(val) {
   else if (val >= 5.333) list(bg = "#dc2626", text = "#ffffff")   # darker red
   else                   list(bg = "#ff0000", text = "#ffffff")   # bright red
 }
+
+# =============================================================================
+# Coach Lee Manual Stats CRUD Helpers
+# =============================================================================
+
+#' Fetch all CAL_MUS batter names from the DB (for modal dropdowns)
+get_cal_mus_batters <- function(pool) {
+  tryCatch(
+    dbGetQuery(pool, "
+      SELECT DISTINCT batter
+      FROM core_level.trackman_event
+      WHERE batterteam = 'CAL_MUS'
+        AND batter IS NOT NULL AND batter != ''
+        AND batter != 'Blood, Jason'
+      ORDER BY batter
+    ")$batter,
+    error = function(e) character(0)
+  )
+}
+
+#' Fetch manual stat entries overlapping a date range
+get_coach_lee_manual <- function(pool, start_date, end_date) {
+  tryCatch(
+    dbGetQuery(pool, "
+      SELECT id, batter, date_start, date_end, pitcher_hand,
+             pa, ab, h, doubles, triples, hr, r, rbi,
+             bb, k, hbp, sf, sb, gb, fly, notes
+      FROM coach_lee_manual_stats
+      WHERE date_start <= $2 AND date_end >= $1
+      ORDER BY batter, date_start
+    ", params = list(start_date, end_date)),
+    error = function(e) data.frame()
+  )
+}
+
+#' Insert a new manual stat entry
+add_coach_lee_manual <- function(pool, batter, date_start, date_end, pitcher_hand,
+                                  pa, ab, h, doubles, triples, hr, r, rbi,
+                                  bb, k, hbp, sf, sb, gb, fly, notes) {
+  tryCatch({
+    dbExecute(pool, "
+      INSERT INTO coach_lee_manual_stats
+        (batter, date_start, date_end, pitcher_hand, pa, ab, h, doubles, triples,
+         hr, r, rbi, bb, k, hbp, sf, sb, gb, fly, notes)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+    ", params = list(batter, date_start, date_end, pitcher_hand,
+                     as.integer(pa), as.integer(ab), as.integer(h),
+                     as.integer(doubles), as.integer(triples), as.integer(hr),
+                     as.integer(r), as.integer(rbi), as.integer(bb),
+                     as.integer(k), as.integer(hbp), as.integer(sf),
+                     as.integer(sb), as.integer(gb), as.integer(fly),
+                     if (is.null(notes) || notes == "") NA_character_ else notes))
+    TRUE
+  }, error = function(e) {
+    message("add_coach_lee_manual error: ", e$message)
+    FALSE
+  })
+}
+
+#' Update an existing manual stat entry
+update_coach_lee_manual <- function(pool, id, batter, date_start, date_end, pitcher_hand,
+                                     pa, ab, h, doubles, triples, hr, r, rbi,
+                                     bb, k, hbp, sf, sb, gb, fly, notes) {
+  tryCatch({
+    dbExecute(pool, "
+      UPDATE coach_lee_manual_stats SET
+        batter=$2, date_start=$3, date_end=$4, pitcher_hand=$5,
+        pa=$6, ab=$7, h=$8, doubles=$9, triples=$10, hr=$11,
+        r=$12, rbi=$13, bb=$14, k=$15, hbp=$16, sf=$17,
+        sb=$18, gb=$19, fly=$20, notes=$21, updated_at=NOW()
+      WHERE id=$1
+    ", params = list(as.integer(id), batter, date_start, date_end, pitcher_hand,
+                     as.integer(pa), as.integer(ab), as.integer(h),
+                     as.integer(doubles), as.integer(triples), as.integer(hr),
+                     as.integer(r), as.integer(rbi), as.integer(bb),
+                     as.integer(k), as.integer(hbp), as.integer(sf),
+                     as.integer(sb), as.integer(gb), as.integer(fly),
+                     if (is.null(notes) || notes == "") NA_character_ else notes))
+    TRUE
+  }, error = function(e) {
+    message("update_coach_lee_manual error: ", e$message)
+    FALSE
+  })
+}
+
+#' Delete a manual stat entry by id
+delete_coach_lee_manual <- function(pool, id) {
+  tryCatch({
+    dbExecute(pool, "DELETE FROM coach_lee_manual_stats WHERE id = $1",
+              params = list(as.integer(id)))
+    TRUE
+  }, error = function(e) {
+    message("delete_coach_lee_manual error: ", e$message)
+    FALSE
+  })
+}

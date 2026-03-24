@@ -232,3 +232,32 @@ CREATE TABLE IF NOT EXISTS hitter_scouting_notes (
 
 CREATE INDEX IF NOT EXISTS idx_hitter_scouting_batter
 ON hitter_scouting_notes(batter_name, team_name);
+
+-- Coach Lee manual stats table for non-Trackman game data (e.g., Hawaii trips)
+CREATE TABLE IF NOT EXISTS coach_lee_manual_stats (
+  id           SERIAL PRIMARY KEY,
+  batter       VARCHAR(100) NOT NULL,
+  date_start   DATE NOT NULL,
+  date_end     DATE NOT NULL,
+  pitcher_hand VARCHAR(10) NOT NULL DEFAULT 'Unknown',  -- 'Left', 'Right', 'Unknown'
+  pa           INTEGER NOT NULL DEFAULT 0,
+  ab           INTEGER NOT NULL DEFAULT 0,
+  h            INTEGER NOT NULL DEFAULT 0,
+  doubles      INTEGER NOT NULL DEFAULT 0,
+  triples      INTEGER NOT NULL DEFAULT 0,
+  hr           INTEGER NOT NULL DEFAULT 0,
+  r            INTEGER NOT NULL DEFAULT 0,
+  rbi          INTEGER NOT NULL DEFAULT 0,
+  bb           INTEGER NOT NULL DEFAULT 0,
+  k            INTEGER NOT NULL DEFAULT 0,
+  hbp          INTEGER NOT NULL DEFAULT 0,
+  sf           INTEGER NOT NULL DEFAULT 0,
+  sb           INTEGER NOT NULL DEFAULT 0,
+  gb           INTEGER NOT NULL DEFAULT 0,
+  fly          INTEGER NOT NULL DEFAULT 0,
+  notes        TEXT,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_coach_lee_manual_batter ON coach_lee_manual_stats(batter);
+CREATE INDEX IF NOT EXISTS idx_coach_lee_manual_dates  ON coach_lee_manual_stats(date_start, date_end);

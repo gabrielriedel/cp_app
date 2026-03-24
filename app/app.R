@@ -56,25 +56,6 @@ player_summary <- function(df,
     "Vonderhaar, Coco"  = "VonderHaar, Coco"
   )
   
-  manual_k <- tibble(
-    Batter = c(
-      "Castellon, Nate",
-      "Downing, Jake",
-      "Garza, Alejandro",
-      "Hoiland, Cameron",
-      "Kordic, Dylan",
-      "McLaurin, Xander",
-      "Murray, Casey",
-      "Spiridonoff, Gavin",
-      "Tayman, Ryan",
-      "Thomas, Braxton",
-      "Vachini, Dante"
-    ),
-    K_vs_LHP_manual = c(0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 2),
-    K_vs_RHP_manual = c(0, 4, 1, 1, 1, 0, 4, 2, 4, 0, 0),
-    PA_vs_LHP_manual = c(1, 2, 1, 1, 2, 1, 1, 1, 1, 4, 2),
-    PA_vs_RHP_manual = c(16, 12, 15, 15, 5, 2, 15, 12, 15, 10, 4)
-  )
   df |>
     filter(
       Date >= start_date,
@@ -104,7 +85,18 @@ player_summary <- function(df,
       sm = if_else(PitchCall == "StrikeSwinging", 1L, 0L),
       sm_fb = if_else(PitchCall == "StrikeSwinging" & TaggedPitchType %in% c("FourSeamFastBall","Fastball","TwoSeamFastBall","Sinker"), 1L, 0L),
       sm_sl_cb = if_else(PitchCall == "StrikeSwinging" & TaggedPitchType %in% c("Slider","Curveball","Sweeper"), 1L, 0L),
-      sm_ch = if_else(PitchCall == "StrikeSwinging" & TaggedPitchType %in% c("ChangeUp","Splitter"), 1L, 0L)
+      sm_ch = if_else(PitchCall == "StrikeSwinging" & TaggedPitchType %in% c("ChangeUp","Splitter"), 1L, 0L),
+
+      # PA-end and K flags using calculate_batter_stats() logic
+      is_pa_end  = if_else(
+        KorBB %in% c("Strikeout", "Walk") | PitchCall %in% c("InPlay", "HitByPitch"),
+        1L, 0L
+      ),
+      is_total_k = if_else(KorBB == "Strikeout", 1L, 0L),
+      pa_lhp = is_pa_end  * as.integer(!is.na(PitcherThrows) & PitcherThrows == "Left"),
+      k_lhp  = is_total_k * as.integer(!is.na(PitcherThrows) & PitcherThrows == "Left"),
+      pa_rhp = is_pa_end  * as.integer(!is.na(PitcherThrows) & PitcherThrows == "Right"),
+      k_rhp  = is_total_k * as.integer(!is.na(PitcherThrows) & PitcherThrows == "Right")
     ) |>
     group_by(Batter) |>
     summarise(
@@ -120,29 +112,14 @@ player_summary <- function(df,
       `S&M CB/SL`    = sum(sm_sl_cb),
       `S&M CH`       = sum(sm_ch),
       `S&M Total`    = sum(sm),
-      PA_vs_LHP      = sum(PitchofPA == "1" & PitcherThrows == "Left", na.rm = TRUE),
-      PA_vs_RHP      = sum(PitchofPA == "1" & PitcherThrows == "Right", na.rm = TRUE),
-      K_vs_LHP       = sum(KorBB == "Strikeout" & PitcherThrows == "Left", na.rm = TRUE),
-      K_vs_RHP       = sum(KorBB == "Strikeout" & PitcherThrows == "Right", na.rm = TRUE),
+      pa_lhp_tm      = sum(pa_lhp, na.rm = TRUE),
+      k_lhp_tm       = sum(k_lhp,  na.rm = TRUE),
+      pa_rhp_tm      = sum(pa_rhp, na.rm = TRUE),
+      k_rhp_tm       = sum(k_rhp,  na.rm = TRUE),
       .groups = "drop"
     ) |>
-    left_join(manual_k, by = "Batter") |>
     mutate(
-      K_vs_LHP = K_vs_LHP + coalesce(K_vs_LHP_manual, 0),
-      K_vs_RHP = K_vs_RHP + coalesce(K_vs_RHP_manual, 0),
-      
-      PA_vs_LHP = PA_vs_LHP + coalesce(PA_vs_LHP_manual, 0),
-      PA_vs_RHP = PA_vs_RHP + coalesce(PA_vs_RHP_manual, 0),
-      
-      # Add manual Ks to total K
-      K = K + coalesce(K_vs_LHP_manual, 0) + coalesce(K_vs_RHP_manual, 0),
-      
-      # Add manual PAs to total PAs if you have a column for total PAs
-      Total_PA = PA_vs_LHP + PA_vs_RHP,  # now includes manual numbers
-      
-      `S&M %` = paste0(round(`S&M Total` / `Total Swings` * 100, 2), "%"),
-      `K% vs LHP` = paste0(K_vs_LHP, "/", PA_vs_LHP, " = ", round(100*K_vs_LHP/pmax(PA_vs_LHP,1),1), "%"),
-      `K% vs RHP` = paste0(K_vs_RHP, "/", PA_vs_RHP, " = ", round(100*K_vs_RHP/pmax(PA_vs_RHP,1),1), "%")
+      `S&M %` = paste0(round(`S&M Total` / `Total Swings` * 100, 2), "%")
     ) |>
     select(
       Batter,
@@ -159,8 +136,7 @@ player_summary <- function(df,
       `S&M CH`,
       `S&M Total`,
       `S&M %`,
-      `K% vs LHP`,
-      `K% vs RHP`
+      pa_lhp_tm, k_lhp_tm, pa_rhp_tm, k_rhp_tm
     )
 }
 
@@ -382,8 +358,12 @@ body <- dashboardBody(
              use the 'Remap To' dropdown to reassign it."),
           DT::DTOutput("pitch_validation_table"),
           br(),
-          actionButton("apply_remap", "Apply & Generate Report",
-                       class = "btn-primary btn-lg")
+          div(style = "display: flex; justify-content: space-between; align-items: center;",
+            actionButton("apply_remap", "Apply & Generate Report",
+                         class = "btn-primary btn-lg"),
+            actionButton("save_pitch_edits_btn", "Save Remaps/Deletes",
+                         class = "btn-sm btn-primary")
+          )
         )
       ),
 
@@ -404,8 +384,10 @@ body <- dashboardBody(
               column(3, uiOutput("pitcher_info_box")),
               column(5,
                 DT::DTOutput("arsenal_table"),
-                actionButton("save_pitch_descriptions", "Save Descriptions",
-                             class = "btn-sm btn-primary", style = "margin-top: 6px;")
+                div(style = "text-align: right; margin-top: 6px;",
+                  actionButton("save_pitch_descriptions", "Save Descriptions",
+                               class = "btn-sm btn-primary")
+                )
               ),
               column(4,
                 plotOutput("slg_heatmap", height = "180px"),
@@ -537,9 +519,15 @@ body <- dashboardBody(
       "coach_lee_hitters",
       fluidRow(
         box(
-          width = 3,
+          width = 2,
           title = "Coach Lee Controls",
           
+          selectInput(
+            "coach_year", "Select Year",
+            choices  = as.character(seq(2024, as.integer(format(Sys.Date(), "%Y")) + 1)),
+            selected = as.character(as.integer(format(Sys.Date(), "%Y")))
+          ),
+
           selectInput(
             "coach_scope",
             "Select Period",
@@ -571,7 +559,7 @@ body <- dashboardBody(
           helpText("Overall = totals for the whole period. Weekly = totals by week.")
         ),
         box(
-          width = 9,
+          width = 10,
           title = "Coach Lee Hitter Summary",
           DT::DTOutput("coach_lee_table")
         )
@@ -608,6 +596,22 @@ body <- dashboardBody(
             tags$li("Add game dates to help track the schedule"),
             tags$li("Remove teams after series are complete")
           )
+        )
+      ),
+      fluidRow(
+        box(
+          width = 12,
+          title = "Non-Trackman Game Data",
+          status = "warning",
+          solidHeader = TRUE,
+          p("Enter box-score stats for games without Trackman coverage (e.g., Hawaii trips).
+            Pitcher hand 'Unknown' entries add to K/BB/HBP totals but NOT to the LHP/RHP K/PA split."),
+          fluidRow(
+            column(3, selectInput("manual_filter_batter", "Filter by Player", choices = c("All Players"))),
+            column(3, br(), actionButton("add_manual_btn", "Add Entry", class = "btn-success"))
+          ),
+          hr(),
+          DT::DTOutput("manual_stats_table")
         )
       )
     )
@@ -1001,22 +1005,40 @@ server <- function(input, output, session) {
   ##########################################
   
   coach_periods <- reactive({
+    y <- as.integer(input$coach_year)
     list(
-      Fall   = c(as.Date("2025-09-25"), as.Date("2025-12-31")),
-      Winter = c(as.Date("2026-01-01"), as.Date("2026-02-12")),
-      Season = c(as.Date("2026-02-13"), as.Date("2026-05-16"))
+      Fall   = c(as.Date(paste0(y,   "-09-01")), as.Date(paste0(y,   "-12-31"))),
+      Winter = c(as.Date(paste0(y,   "-01-01")), as.Date(paste0(y,   "-02-10"))),
+      Season = c(as.Date(paste0(y,   "-02-11")), as.Date(paste0(y,   "-06-30")))
     )
   })
   
-  coach_df <- reactive({
-    df <- cp_df
-    
-    # Ensure Date is Date (adjust format here if your CSV is m/d/Y)
-    if (!inherits(df$Date, "Date")) df$Date <- as.Date(df$Date)
-    
-    df |>
-      filter(BatterTeam == "CAL_MUS") |>
-      filter(Batter != "Blood, Jason")
+  coach_trackman_raw <- reactive({
+    rng <- coach_range()
+    tryCatch(
+      dbGetQuery(pool, "
+        SELECT batter, date, pitchcall, korbb, taggedpitchtype,
+               strikes, pitcherthrows, playresult, taggedhittype
+        FROM core_level.trackman_event
+        WHERE batterteam = 'CAL_MUS'
+          AND date BETWEEN $1 AND $2
+          AND batter IS NOT NULL AND batter != ''
+          AND batter != 'Blood, Jason'
+      ", params = list(rng$start, rng$end)),
+      error = function(e) data.frame()
+    ) |>
+    rename(
+      Batter          = batter,
+      Date            = date,
+      PitchCall       = pitchcall,
+      KorBB           = korbb,
+      TaggedPitchType = taggedpitchtype,
+      Strikes         = strikes,
+      PitcherThrows   = pitcherthrows,
+      PlayResult      = playresult,
+      TaggedHitType   = taggedhittype
+    ) |>
+    mutate(Date = as.Date(Date))
   })
   
   coach_range <- reactive({
@@ -1025,16 +1047,13 @@ server <- function(input, output, session) {
     list(start = rng[1], end = rng[2])
   })
   
-  # Update player dropdown when period changes (only players in that period)
-  observeEvent(input$coach_scope, {
-    rng <- coach_range()
-    
-    players <- coach_df() |>
-      filter(Date >= rng$start, Date <= rng$end) |>
+  # Update player dropdown when period or year changes (only players in that period)
+  observeEvent(list(input$coach_scope, input$coach_year), {
+    players <- coach_trackman_raw() |>
       pull(Batter) |>
       unique() |>
       sort()
-    
+
     updateSelectInput(
       session,
       "coach_player",
@@ -1043,17 +1062,33 @@ server <- function(input, output, session) {
     )
   }, ignoreInit = FALSE)
   
-  # Build available weeks for the chosen period
+  # Build available weeks for the chosen period (Trackman + manual entries)
   coach_weeks_df <- reactive({
-    rng <- coach_range()
-    
-    coach_df() |>
-      filter(Date >= rng$start, Date <= rng$end) |>
+    tm_weeks <- coach_trackman_raw() |>
       mutate(
         week_start = Date - (as.integer(format(Date, "%u")) - 1L), # Monday start
         week_end   = week_start + 6L,
         week_label = paste0("Week of ", week_start, " (", week_start, " to ", week_end, ")")
       ) |>
+      distinct(week_start, week_end, week_label)
+
+    man <- coach_manual_raw()
+    man_weeks <- if (nrow(man) > 0) {
+      man |>
+        mutate(
+          ds         = as.Date(date_start),
+          week_start = ds - (as.integer(format(ds, "%u")) - 1L),
+          week_end   = week_start + 6L,
+          week_label = paste0("Week of ", week_start, " (", week_start, " to ", week_end, ")")
+        ) |>
+        distinct(week_start, week_end, week_label)
+    } else {
+      data.frame(week_start = as.Date(character(0)),
+                 week_end   = as.Date(character(0)),
+                 week_label = character(0))
+    }
+
+    bind_rows(tm_weeks, man_weeks) |>
       distinct(week_start, week_end, week_label) |>
       arrange(week_start)
   })
@@ -1072,54 +1107,160 @@ server <- function(input, output, session) {
   
   # Core filtered dataset based on period + optional player
   coach_filtered <- reactive({
-    rng <- coach_range()
-    
-    df <- coach_df() |>
-      filter(Date >= rng$start, Date <= rng$end)
-    
+    df <- coach_trackman_raw()
+
     if (!is.null(input$coach_player) && input$coach_player != "All Players") {
       df <- df |>
         filter(Batter == input$coach_player)
     }
-    
+
     df
   })
   
+  # Reactive trigger for manual stats CRUD invalidation
+  manual_trigger <- reactiveVal(0)
+
+  # Manual entries overlapping the current period
+  coach_manual_raw <- reactive({
+    rng <- coach_range()
+    manual_trigger()
+    get_coach_lee_manual(pool, rng$start, rng$end)
+  })
+
+  # All manual entries (for Student Manager table — no date scoping)
+  all_manual_entries <- reactive({
+    manual_trigger()
+    get_coach_lee_manual(pool, as.Date("2000-01-01"), as.Date("2099-12-31"))
+  })
+
+  # ---- merge_coach_summaries() ----
+  # Combines Trackman-only player_summary() output with manual stat entries.
+  # Adds manual BB/HBP to Walks/HBP columns and formats K/PA (LHP)/(RHP) strings.
+  merge_coach_summaries <- function(tm_df, manual_df, player_filter = "All Players") {
+    fmt_kpa <- function(k, pa) {
+      if (pa == 0) return("0/0")
+      paste0(k, "/", pa, " = ", round(k / pa * 100), "%")
+    }
+
+    if (!is.null(player_filter) && player_filter != "All Players" && nrow(manual_df) > 0)
+      manual_df <- manual_df |> filter(batter == player_filter)
+
+    if (nrow(tm_df) == 0 && nrow(manual_df) == 0) return(tm_df)
+
+    # Trackman-only path: no manual entries for this period/player
+    if (nrow(manual_df) == 0) {
+      return(
+        tm_df |>
+          mutate(
+            `K/PA (LHP)`   = mapply(fmt_kpa, k_lhp_tm, pa_lhp_tm),
+            `K/PA (RHP)`   = mapply(fmt_kpa, k_rhp_tm, pa_rhp_tm),
+            `K/PA (Total)` = mapply(fmt_kpa, k_lhp_tm + k_rhp_tm, pa_lhp_tm + pa_rhp_tm)
+          ) |>
+          select(-ends_with("_tm"))
+      )
+    }
+
+    man_agg <- manual_df |>
+      group_by(batter) |>
+      summarise(
+        manual_bb     = sum(bb,  na.rm = TRUE),
+        manual_hbp    = sum(hbp, na.rm = TRUE),
+        manual_k_lhp  = sum(k  [pitcher_hand == "Left"],  na.rm = TRUE),
+        manual_pa_lhp = sum(pa  [pitcher_hand == "Left"],  na.rm = TRUE),
+        manual_k_rhp  = sum(k  [pitcher_hand == "Right"], na.rm = TRUE),
+        manual_pa_rhp = sum(pa  [pitcher_hand == "Right"], na.rm = TRUE),
+        manual_k_all  = sum(k,  na.rm = TRUE),  # includes Unknown pitcher_hand
+        manual_pa_all = sum(pa, na.rm = TRUE),  # includes Unknown pitcher_hand
+        .groups = "drop"
+      ) |>
+      rename(Batter = batter)
+
+    # full_join so players with only manual stats (no Trackman PAs) still appear
+    full_join(tm_df, man_agg, by = "Batter") |>
+      mutate(
+        across(where(is.numeric), ~ replace_na(.x, 0)),
+        `S&M %` = replace_na(`S&M %`, "0%")
+      ) |>
+      mutate(
+        Walks          = Walks + manual_bb,
+        HBP            = HBP   + manual_hbp,
+        `K/PA (LHP)`   = mapply(fmt_kpa, k_lhp_tm + manual_k_lhp, pa_lhp_tm + manual_pa_lhp),
+        `K/PA (RHP)`   = mapply(fmt_kpa, k_rhp_tm + manual_k_rhp, pa_rhp_tm + manual_pa_rhp),
+        `K/PA (Total)` = mapply(fmt_kpa, k_lhp_tm + k_rhp_tm + manual_k_all, pa_lhp_tm + pa_rhp_tm + manual_pa_all)
+      ) |>
+      select(-starts_with("manual_"), -ends_with("_tm"))
+  }
+
   # Overall period table (one summary per batter)
   coach_overall_table <- reactive({
-    df <- coach_filtered()
-    
-    # player_summary already groups by Batter
-    out <- player_summary(df, start_date = min(df$Date), end_date = max(df$Date))
-    
-    # If they picked one player, still fine (one row)
-    out |>
+    df     <- coach_filtered()
+    manual <- coach_manual_raw()
+    if (nrow(df) == 0 && nrow(manual) == 0) return(data.frame())
+
+    tm <- if (nrow(df) > 0) {
+      player_summary(df, start_date = min(df$Date), end_date = max(df$Date))
+    } else {
+      player_summary(df)  # 0-row df with correct column structure
+    }
+    merge_coach_summaries(tm, manual, input$coach_player) |>
       arrange(Batter)
   })
-  
+
   # Weekly table (summary per batter per week)
   coach_weekly_table <- reactive({
     df <- coach_filtered()
-    
+    manual <- coach_manual_raw()
+
+    if (nrow(df) == 0 && nrow(manual) == 0) return(data.frame())
+
     df2 <- df |>
       mutate(
         week_start = Date - (as.integer(format(Date, "%u")) - 1L),
         week_end   = week_start + 6L,
         Week = paste0("Week of ", week_start, " (", week_start, " to ", week_end, ")")
       )
-    
-    # If a specific week is selected, filter to it
-    if (!is.null(input$coach_week) && input$coach_week != "All weeks") {
-      df2 <- df2 |>
-        filter(Week == input$coach_week)
+
+    # Add week labels to manual data
+    man_labeled <- if (nrow(manual) > 0) {
+      manual |>
+        mutate(
+          ds           = as.Date(date_start),
+          week_start_d = ds - (as.integer(format(ds, "%u")) - 1L),
+          week_end_d   = week_start_d + 6L,
+          Week = paste0("Week of ", week_start_d, " (", week_start_d, " to ", week_end_d, ")")
+        )
+    } else {
+      data.frame()
     }
-    
-    weekly <- df2 |>
-      group_by(Week) |>
-      group_modify(~ player_summary(.x, start_date = min(.x$Date), end_date = max(.x$Date))) |>
-      ungroup()
-    
-    weekly |>
+
+    if (!is.null(input$coach_week) && input$coach_week != "All weeks") {
+      df2 <- df2 |> filter(Week == input$coach_week)
+      if (nrow(man_labeled) > 0) man_labeled <- man_labeled |> filter(Week == input$coach_week)
+    }
+
+    # Include weeks that exist only in manual data (e.g. Hawaii trip weeks)
+    man_weeks     <- if (nrow(man_labeled) > 0) unique(man_labeled$Week) else character(0)
+    weeks_present <- sort(unique(c(unique(df2$Week), man_weeks)))
+    if (length(weeks_present) == 0) return(data.frame())
+
+    result_list <- lapply(weeks_present, function(wk) {
+      tm_wk <- df2 |> filter(Week == wk)
+      # When no Trackman data for this week, pass the 0-row df to get correct column structure
+      tm_sum <- if (nrow(tm_wk) > 0) {
+        player_summary(tm_wk, start_date = min(tm_wk$Date), end_date = max(tm_wk$Date))
+      } else {
+        player_summary(tm_wk)
+      }
+      man_wk <- if (nrow(man_labeled) > 0) man_labeled |> filter(Week == wk) else data.frame()
+      merged <- merge_coach_summaries(tm_sum, man_wk)
+      if (nrow(merged) == 0) return(NULL)
+      merged$Week <- wk
+      merged
+    })
+
+    result_list <- Filter(Negate(is.null), result_list)
+
+    bind_rows(result_list) |>
       select(Week, everything()) |>
       arrange(Week, Batter)
   })
@@ -1140,6 +1281,226 @@ server <- function(input, output, session) {
         pageLength = 25,
         scrollX = TRUE
       )
+    )
+  })
+
+  ##########################################
+  ####### Student Manager - Manual Stats   #
+  ##########################################
+
+  # Populate the filter/modal batter dropdowns
+  observe({
+    manual_trigger()
+    batters <- get_cal_mus_batters(pool)
+    updateSelectInput(session, "manual_filter_batter",
+                      choices  = c("All Players", batters),
+                      selected = "All Players")
+  })
+
+  # Build the Add/Edit modal
+  manual_entry_modal <- function(existing = NULL, batter_choices = character(0)) {
+    is_edit <- !is.null(existing)
+    modalDialog(
+      title = if (is_edit) "Edit Non-Trackman Entry" else "Add Non-Trackman Entry",
+      size  = "l",
+      fluidRow(
+        column(12,
+          selectizeInput("manual_batter", "Batter",
+                         choices  = batter_choices,
+                         selected = if (is_edit) existing$batter else "",
+                         options  = list(create = TRUE))
+        )
+      ),
+      fluidRow(
+        column(4, dateInput("manual_date_start", "Date Start",
+                            value = if (is_edit) existing$date_start else Sys.Date())),
+        column(4, dateInput("manual_date_end", "Date End",
+                            value = if (is_edit) existing$date_end else Sys.Date())),
+        column(4, selectInput("manual_pitcher_hand", "Pitcher Hand",
+                              choices  = c("Left", "Right", "Unknown"),
+                              selected = if (is_edit) existing$pitcher_hand else "Unknown"))
+      ),
+      fluidRow(
+        column(2, numericInput("manual_pa",      "PA",  value = if (is_edit) existing$pa      else 0, min = 0)),
+        column(2, numericInput("manual_ab",      "AB",  value = if (is_edit) existing$ab      else 0, min = 0)),
+        column(2, numericInput("manual_h",       "H",   value = if (is_edit) existing$h       else 0, min = 0)),
+        column(2, numericInput("manual_doubles", "2B",  value = if (is_edit) existing$doubles else 0, min = 0)),
+        column(2, numericInput("manual_triples", "3B",  value = if (is_edit) existing$triples else 0, min = 0)),
+        column(2, numericInput("manual_hr",      "HR",  value = if (is_edit) existing$hr      else 0, min = 0))
+      ),
+      fluidRow(
+        column(2, numericInput("manual_r",   "R",   value = if (is_edit) existing$r   else 0, min = 0)),
+        column(2, numericInput("manual_rbi", "RBI", value = if (is_edit) existing$rbi else 0, min = 0)),
+        column(2, numericInput("manual_bb",  "BB",  value = if (is_edit) existing$bb  else 0, min = 0)),
+        column(2, numericInput("manual_k",   "K",   value = if (is_edit) existing$k   else 0, min = 0)),
+        column(2, numericInput("manual_hbp", "HBP", value = if (is_edit) existing$hbp else 0, min = 0)),
+        column(2, numericInput("manual_sf",  "SF",  value = if (is_edit) existing$sf  else 0, min = 0))
+      ),
+      fluidRow(
+        column(2, numericInput("manual_sb",  "SB",         value = if (is_edit) existing$sb  else 0, min = 0)),
+        column(2, numericInput("manual_gb",  "GB (count)", value = if (is_edit) existing$gb  else 0, min = 0)),
+        column(2, numericInput("manual_fly", "FLY (count)",value = if (is_edit) existing$fly else 0, min = 0))
+      ),
+      fluidRow(
+        column(12, textAreaInput("manual_notes", "Notes",
+                                 value = if (is_edit && !is.na(existing$notes)) existing$notes else "",
+                                 rows  = 2))
+      ),
+      footer = tagList(
+        modalButton("Cancel"),
+        if (!is_edit)
+          actionButton("save_manual_entry", "Save Entry",   class = "btn-success")
+        else
+          actionButton("save_manual_edit",  "Save Changes", class = "btn-primary")
+      ),
+      easyClose = FALSE
+    )
+  }
+
+  # Open Add modal
+  observeEvent(input$add_manual_btn, {
+    batters <- get_cal_mus_batters(pool)
+    showModal(manual_entry_modal(NULL, batter_choices = batters))
+  })
+
+  # Save new entry
+  observeEvent(input$save_manual_entry, {
+    req(input$manual_batter)
+    ok <- add_coach_lee_manual(
+      pool,
+      batter       = input$manual_batter,
+      date_start   = input$manual_date_start,
+      date_end     = input$manual_date_end,
+      pitcher_hand = input$manual_pitcher_hand,
+      pa      = input$manual_pa      %||% 0,
+      ab      = input$manual_ab      %||% 0,
+      h       = input$manual_h       %||% 0,
+      doubles = input$manual_doubles %||% 0,
+      triples = input$manual_triples %||% 0,
+      hr      = input$manual_hr      %||% 0,
+      r       = input$manual_r       %||% 0,
+      rbi     = input$manual_rbi     %||% 0,
+      bb      = input$manual_bb      %||% 0,
+      k       = input$manual_k       %||% 0,
+      hbp     = input$manual_hbp     %||% 0,
+      sf      = input$manual_sf      %||% 0,
+      sb      = input$manual_sb      %||% 0,
+      gb      = input$manual_gb      %||% 0,
+      fly     = input$manual_fly     %||% 0,
+      notes   = input$manual_notes   %||% ""
+    )
+    if (ok) {
+      manual_trigger(manual_trigger() + 1)
+      removeModal()
+      showNotification("Entry added", type = "message", duration = 2)
+    } else {
+      showNotification("Failed to save entry", type = "error")
+    }
+  })
+
+  # Open Edit modal
+  observeEvent(input$edit_manual_id, {
+    req(input$edit_manual_id)
+    all_data <- all_manual_entries()
+    row <- all_data |> filter(id == input$edit_manual_id)
+    if (nrow(row) == 0) return()
+    batters <- get_cal_mus_batters(pool)
+    showModal(manual_entry_modal(as.list(row[1, ]), batter_choices = batters))
+  })
+
+  # Save edited entry
+  observeEvent(input$save_manual_edit, {
+    req(input$manual_batter, input$edit_manual_id)
+    ok <- update_coach_lee_manual(
+      pool,
+      id           = input$edit_manual_id,
+      batter       = input$manual_batter,
+      date_start   = input$manual_date_start,
+      date_end     = input$manual_date_end,
+      pitcher_hand = input$manual_pitcher_hand,
+      pa      = input$manual_pa      %||% 0,
+      ab      = input$manual_ab      %||% 0,
+      h       = input$manual_h       %||% 0,
+      doubles = input$manual_doubles %||% 0,
+      triples = input$manual_triples %||% 0,
+      hr      = input$manual_hr      %||% 0,
+      r       = input$manual_r       %||% 0,
+      rbi     = input$manual_rbi     %||% 0,
+      bb      = input$manual_bb      %||% 0,
+      k       = input$manual_k       %||% 0,
+      hbp     = input$manual_hbp     %||% 0,
+      sf      = input$manual_sf      %||% 0,
+      sb      = input$manual_sb      %||% 0,
+      gb      = input$manual_gb      %||% 0,
+      fly     = input$manual_fly     %||% 0,
+      notes   = input$manual_notes   %||% ""
+    )
+    if (ok) {
+      manual_trigger(manual_trigger() + 1)
+      removeModal()
+      showNotification("Entry updated", type = "message", duration = 2)
+    } else {
+      showNotification("Failed to update entry", type = "error")
+    }
+  })
+
+  # Show delete confirmation
+  observeEvent(input$delete_manual_id, {
+    req(input$delete_manual_id)
+    showModal(modalDialog(
+      title = "Confirm Delete",
+      "Are you sure you want to delete this entry?",
+      footer = tagList(
+        modalButton("Cancel"),
+        actionButton("confirm_delete_manual", "Delete", class = "btn-danger")
+      ),
+      easyClose = TRUE
+    ))
+  })
+
+  # Execute delete
+  observeEvent(input$confirm_delete_manual, {
+    req(input$delete_manual_id)
+    ok <- delete_coach_lee_manual(pool, input$delete_manual_id)
+    if (ok) {
+      manual_trigger(manual_trigger() + 1)
+      showNotification("Entry deleted", type = "message", duration = 2)
+    } else {
+      showNotification("Failed to delete entry", type = "error")
+    }
+    removeModal()
+  })
+
+  # Render the manual stats table in Student Manager
+  output$manual_stats_table <- DT::renderDT({
+    df <- all_manual_entries()
+
+    if (!is.null(input$manual_filter_batter) && input$manual_filter_batter != "All Players") {
+      df <- df |> filter(batter == input$manual_filter_batter)
+    }
+
+    if (nrow(df) == 0) {
+      return(DT::datatable(data.frame(Message = "No entries found."),
+                           options = list(dom = "t"), rownames = FALSE))
+    }
+
+    df_display <- df |>
+      mutate(
+        Actions = paste0(
+          '<button class="btn btn-xs btn-warning" style="margin-right:3px;" ',
+          'onclick="Shiny.setInputValue(\'edit_manual_id\', ', id, ', {priority: \'event\'})">Edit</button>',
+          '<button class="btn btn-xs btn-danger" ',
+          'onclick="Shiny.setInputValue(\'delete_manual_id\', ', id, ', {priority: \'event\'})">Delete</button>'
+        )
+      ) |>
+      select(Actions, batter, date_start, date_end, pitcher_hand,
+             pa, ab, h, doubles, triples, hr, r, rbi, bb, k, hbp, sf, sb, gb, fly, notes)
+
+    DT::datatable(
+      df_display,
+      rownames = FALSE,
+      escape   = FALSE,
+      options  = list(pageLength = 15, scrollX = TRUE)
     )
   })
 
@@ -1620,9 +1981,6 @@ server <- function(input, output, session) {
         showNotification("Notes saved", type = "message", duration = 2)
       }
 
-      # Save pitch deletions and remaps
-      save_pitch_edits(pool, input$opp_pitcher, input$opp_team, deletions, as.list(remap), input$opp_split)
-
       incProgress(0.05, detail = "Done!")
     })
 
@@ -1968,10 +2326,35 @@ server <- function(input, output, session) {
       if (!is.null(val) && nzchar(val)) descriptions[[pt]] <- val
     }
 
-    save_pitch_descriptions(pool, input$opp_pitcher, input$opp_team,
-                            descriptions, input$opp_split)
+    save_pitch_descriptions(pool, input$opp_pitcher, input$opp_team, descriptions, "Left")
+    save_pitch_descriptions(pool, input$opp_pitcher, input$opp_team, descriptions, "Right")
     rval_pitch_descriptions(descriptions)
     showNotification("Pitch descriptions saved!", type = "message", duration = 2)
+  })
+
+  # Save remap/delete selections to DB
+  observeEvent(input$save_pitch_edits_btn, {
+    req(input$opp_pitcher, input$opp_team)
+    summary_df <- rval_validation_summary()
+    req(nrow(summary_df) > 0)
+
+    remap <- setNames(
+      sapply(seq_len(nrow(summary_df)), function(i) {
+        val <- input[[paste0("remap_", i)]]
+        if (is.null(val) || val == "") summary_df$pitch_type[i] else val
+      }),
+      summary_df$pitch_type
+    )
+
+    deleted <- sapply(seq_len(nrow(summary_df)), function(i) {
+      is_deleted <- input[[paste0("delete_pitch_", i)]]
+      if (!is.null(is_deleted) && isTRUE(is_deleted)) summary_df$pitch_type[i] else NA_character_
+    })
+    deletions <- deleted[!is.na(deleted)]
+
+    save_pitch_edits(pool, input$opp_pitcher, input$opp_team, deletions, as.list(remap), "Left")
+    save_pitch_edits(pool, input$opp_pitcher, input$opp_team, deletions, as.list(remap), "Right")
+    showNotification("Pitch remaps/deletes saved!", type = "message", duration = 2)
   })
 
   # ---- Velocity override modal ----
