@@ -462,15 +462,12 @@ body <- dashboardBody(
             fluidRow(
               column(2, textAreaInput("notes_risp", "RISP Notes", rows = 4, width = "100%",
                                       placeholder = "Notes for RISP...")),
-              column(2, uiOutput("risp_slot_1")),
-              column(2, uiOutput("risp_slot_2")),
-              column(2, uiOutput("risp_slot_3")),
-              column(2, uiOutput("risp_slot_4"))
+              uiOutput("risp_slots_container")
             ),
             # RISP Usage inputs
             fluidRow(
               column(2),  # Empty to align with notes column
-              column(8, uiOutput("risp_usage_inputs"))
+              column(10, uiOutput("risp_usage_inputs"))
             )
           )
           )
@@ -1699,7 +1696,7 @@ server <- function(input, output, session) {
     rval_pitch_descriptions(descriptions)
 
     # Load saved pitch deletions/remaps (with split)
-    saved_edits <- get_pitch_edits(pool, input$opp_pitcher, input$opp_team, input$opp_split)
+    saved_edits <- get_pitch_edits(pool, input$opp_pitcher, input$opp_team, "Both")
     rval_saved_pitch_edits(saved_edits)
 
     # Load pitcher stats (shared across splits — IP/ERA/K/BB are pitcher-level, not split-specific)
@@ -2352,8 +2349,7 @@ server <- function(input, output, session) {
     })
     deletions <- deleted[!is.na(deleted)]
 
-    save_pitch_edits(pool, input$opp_pitcher, input$opp_team, deletions, as.list(remap), "Left")
-    save_pitch_edits(pool, input$opp_pitcher, input$opp_team, deletions, as.list(remap), "Right")
+    save_pitch_edits(pool, input$opp_pitcher, input$opp_team, deletions, as.list(remap), "Both")
     showNotification("Pitch remaps/deletes saved!", type = "message", duration = 2)
   })
 
@@ -2449,53 +2445,43 @@ server <- function(input, output, session) {
     get_risp_images(pool, input$opp_pitcher, input$opp_team, input$opp_split)
   })
 
-  # Helper function to create individual RISP slot UI
-  create_risp_slot <- function(slot_num) {
-    renderUI({
-      data <- rval_processed_data()
-      req(data, input$opp_split)
-      arsenal <- data$arsenal
+  # Dynamic RISP slots container — renders one column per pitch type (no 4-pitch cap)
+  output$risp_slots_container <- renderUI({
+    data <- rval_processed_data()
+    req(data, input$opp_split)
+    arsenal <- data$arsenal
+    if (is.null(arsenal) || nrow(arsenal) == 0) return(NULL)
 
-      if (is.null(arsenal) || nrow(arsenal) < slot_num) {
-        return(tags$div(style = "height: 180px;"))  # Empty placeholder
-      }
+    n <- nrow(arsenal)
+    col_width <- max(1, floor(10 / n))
 
-      pt <- arsenal$pitch_type[slot_num]
+    risp_images <- rval_risp_images()
+    if (!is.list(risp_images)) risp_images <- as.list(risp_images)
 
-      # Load existing RISP images (shared reactive — 1 query per flush, not 4)
-      risp_images <- rval_risp_images()
-      if (!is.list(risp_images)) risp_images <- as.list(risp_images)
-
-      # Safely extract URL
-      existing_url <- NULL
-      if (pt %in% names(risp_images)) {
+    lapply(seq_len(n), function(i) {
+      pt <- arsenal$pitch_type[i]
+      existing_url <- if (pt %in% names(risp_images)) {
         val <- risp_images[[pt]]
-        if (!is.null(val) && length(val) > 0) existing_url <- as.character(val[1])
-      }
+        if (!is.null(val) && length(val) > 0) as.character(val[1]) else NULL
+      } else NULL
 
-      tags$div(
-        style = "text-align: center; height: 180px;",
-        tags$strong(style = "font-size: 12px; display: block; margin-bottom: 5px;", pt),
-        if (!is.null(existing_url) && existing_url != "") {
-          tags$div(
+      column(col_width,
+        tags$div(
+          style = "text-align: center; height: 180px;",
+          tags$strong(style = "font-size: 12px; display: block; margin-bottom: 5px;", pt),
+          if (!is.null(existing_url) && existing_url != "") {
             tags$img(src = existing_url, style = "width: 100%; max-height: 120px; object-fit: contain; border-radius: 4px; border: 1px solid #ddd;")
-          )
-        } else {
-          tags$div(
-            style = "height: 100px; display: flex; align-items: center; justify-content: center; background: #f5f5f5; border: 1px dashed #ccc; border-radius: 4px;",
-            tags$small(style = "color: #888;", "No image")
-          )
-        },
-        fileInput(paste0("risp_upload_", slot_num), NULL, accept = c("image/png", "image/jpeg"), width = "100%")
+          } else {
+            tags$div(
+              style = "height: 100px; display: flex; align-items: center; justify-content: center; background: #f5f5f5; border: 1px dashed #ccc; border-radius: 4px;",
+              tags$small(style = "color: #888;", "No image")
+            )
+          },
+          fileInput(paste0("risp_upload_", i), NULL, accept = c("image/png", "image/jpeg"), width = "100%")
+        )
       )
     })
-  }
-
-  # Create individual RISP slot outputs (matching the 4 heatmap columns)
-  output$risp_slot_1 <- create_risp_slot(1)
-  output$risp_slot_2 <- create_risp_slot(2)
-  output$risp_slot_3 <- create_risp_slot(3)
-  output$risp_slot_4 <- create_risp_slot(4)
+  })
 
   # Reactive value for RISP usages
   rval_risp_usages <- reactiveVal(list())
@@ -2508,7 +2494,7 @@ server <- function(input, output, session) {
 
     if (is.null(arsenal) || nrow(arsenal) == 0) return(NULL)
 
-    pitch_types <- head(arsenal$pitch_type, 4)
+    pitch_types <- arsenal$pitch_type
 
     # Load existing RISP usages
     risp_usages <- get_risp_usages(pool, input$opp_pitcher, input$opp_team, input$opp_split)
@@ -2556,7 +2542,7 @@ server <- function(input, output, session) {
 
     if (is.null(arsenal) || nrow(arsenal) == 0) return()
 
-    pitch_types <- head(arsenal$pitch_type, 4)
+    pitch_types <- arsenal$pitch_type
 
     # Collect usage values
     usages <- list()
@@ -2582,7 +2568,7 @@ server <- function(input, output, session) {
     if (!isTRUE(session$userData$.risp_obs_created)) {
       session$userData$.risp_obs_created <- TRUE
 
-      for (idx in 1:4) {
+      for (idx in 1:8) {
         local({
           i <- idx
           observeEvent(input[[paste0("risp_upload_", i)]], {
@@ -2939,7 +2925,7 @@ server <- function(input, output, session) {
 
             # Apply saved deletions
             saved_edits <- tryCatch(
-              get_pitch_edits(pool, pitcher, input$opp_team, split),
+              get_pitch_edits(pool, pitcher, input$opp_team, "Both"),
               error = function(e) list(deletions = character(0), remaps = list())
             )
             if (length(saved_edits$deletions) > 0) {

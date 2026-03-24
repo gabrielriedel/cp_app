@@ -379,7 +379,10 @@ body {
   min-width: 90px;
   max-width: 100px;
   font-size: 9px;
-  min-height: 45px;
+  min-height: 20px;
+  max-height: 54px;
+  overflow: hidden;
+  line-height: 1.2;
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
@@ -564,11 +567,13 @@ if (!is.null(params$arsenal) && nrow(params$arsenal) > 0) {
 
 ```{r attack-notes, results='asis', echo=FALSE}
 # Gameplan section fills lower half of middle column
-gameplan_val <- if (!is.null(params$notes$gameplan) && params$notes$gameplan != "") params$notes$gameplan else ""
-cat('<div style="background:#fffbeb; border:1px solid #f6e05e; border-radius:3px; padding:4px 6px; margin-top:4px; min-height:60px;">')
+gameplan_val <- trimws(if (!is.null(params$notes$gameplan) && params$notes$gameplan != "") params$notes$gameplan else "")
+cat('<div style="background:#fffbeb; border:1px solid #f6e05e; border-radius:3px; padding:4px 6px; margin-top:4px; min-height:20px;">')
 cat('<div style="font-weight:bold; color:#744210; font-size:8px; margin-bottom:4px;">GAMEPLAN</div>')
-cat(sprintf('<div style="font-size:8px; line-height:1.4; white-space:pre-wrap; color:#1a202c;">%s</div>',
-            if (gameplan_val != "") htmltools::htmlEscape(gameplan_val) else "\u2014"))
+content_html <- if (gameplan_val != "") {
+  gsub("\r?\n", "<br>", htmltools::htmlEscape(gameplan_val))
+} else "\u2014"
+cat(sprintf('<div style="font-size:8px; line-height:1.4; color:#1a202c;">%s</div>', content_html))
 cat('</div>')
 ```
 
